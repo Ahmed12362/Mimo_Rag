@@ -50,14 +50,40 @@ class ArchitectureRulesTest {
 				"io.jsonwebtoken..")
 		.allowEmptyShould(true);
 
+	/** ADR-0009: domain classes may carry jakarta.persistence mapping annotations, but nothing else framework-specific. */
 	@ArchTest
 	static final ArchRule domainIsFrameworkFree = noClasses().that()
 		.resideInAPackage("..domain..")
 		.should()
 		.dependOnClassesThat()
-		.resideInAnyPackage("org.springframework..", "jakarta.persistence..", "org.hibernate..",
-				"tools.jackson..", "com.fasterxml.jackson..", "jakarta.servlet..")
+		.resideInAnyPackage("org.springframework..", "org.hibernate..", "tools.jackson..", "com.fasterxml.jackson..",
+				"jakarta.servlet..")
 		.allowEmptyShould(true);
+
+	@ArchTest
+	static final ArchRule domainDependsOnNoOuterLayer = noClasses().that()
+		.resideInAPackage("..domain..")
+		.should()
+		.dependOnClassesThat()
+		.resideInAnyPackage("..application..", "..api..", "..infrastructure..")
+		.allowEmptyShould(true);
+
+	/** The access module talks to the integration module only through its application layer. */
+	@ArchTest
+	static final ArchRule accessUsesIntegrationApplicationLayerOnly = noClasses().that()
+		.resideInAPackage(ROOT + ".access..")
+		.should()
+		.dependOnClassesThat()
+		.resideInAnyPackage(ROOT + ".integration.api..", ROOT + ".integration.infrastructure..")
+		.allowEmptyShould(true);
+
+	/** JWT/JOSE libraries are confined to the access module. */
+	@ArchTest
+	static final ArchRule joseLibrariesOnlyInAccess = noClasses().that()
+		.resideOutsideOfPackage(ROOT + ".access..")
+		.should()
+		.dependOnClassesThat()
+		.resideInAnyPackage("com.nimbusds..", "org.springframework.security.oauth2..", "io.jsonwebtoken..");
 
 	@ArchTest
 	static final ArchRule apiLayerDoesNotReachIntoInfrastructure = noClasses().that()

@@ -1,6 +1,6 @@
 # ADR-0001: Modular monolith and module boundaries
 
-- **Status:** Accepted
+- **Status:** Accepted. The domain/JPA rule was amended by [ADR-0009](0009-jpa-annotations-in-domain.md).
 - **Date:** 2026-11-23
 
 ## Context

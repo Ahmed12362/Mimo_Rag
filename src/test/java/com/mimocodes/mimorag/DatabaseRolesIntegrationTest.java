@@ -39,12 +39,15 @@ class DatabaseRolesIntegrationTest extends PostgresIntegrationTest {
 	}
 
 	@Test
-	void baselineMigrationWasAppliedByOwnerRole() {
-		MigrationInfo baseline = flyway.info().current();
+	void allMigrationsWereAppliedSuccessfullyByOwnerRole() {
+		MigrationInfo[] applied = flyway.info().applied();
 
-		assertThat(baseline.getVersion().getVersion()).isEqualTo("1");
-		assertThat(baseline.getState().isApplied()).isTrue();
-		assertThat(baseline.getInstalledBy()).isEqualTo("mimorag_owner");
+		assertThat(applied).isNotEmpty().allSatisfy(migration -> {
+			assertThat(migration.getState().isApplied()).isTrue();
+			assertThat(migration.getState().isFailed()).isFalse();
+			assertThat(migration.getInstalledBy()).isEqualTo("mimorag_owner");
+		});
+		assertThat(flyway.info().pending()).isEmpty();
 	}
 
 	@Test

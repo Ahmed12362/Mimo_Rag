@@ -14,8 +14,8 @@ _Last updated: 2026-11-23._
 
 | Milestone | Status |
 |---|---|
-| M0 — Repository inspection and architecture baseline | **Implemented. Awaiting approval and commit.** |
-| M1 — Integration and Knowledge Base foundation (identity, RLS) | Not started |
+| M0 — Repository inspection and architecture baseline | ✅ Done (committed `d963e59`; `main` created at this commit) |
+| M1 — Integration and Knowledge Base foundation (identity, RLS) | **Implemented on `feature/m1-integration-kb-foundation`. Awaiting approval and commit.** |
 | M2 — PDF upload and extraction | Not started (reassess Docker disk usage first) |
 | M3 — Review, submit and approved snapshot (API-first) | Not started |
 | M4 — Chunking, embeddings, indexing | Not started |
@@ -43,6 +43,10 @@ Detailed acceptance results: [`PROJECT_PROGRESS.md`](../PROJECT_PROGRESS.md).
 | D-13 | OCR corpus: synthetic Arabic/English PDFs (scanned, digital, mixed). Real company documents only with authorization, and never committed. | — |
 | D-14 | English for all technical documentation and progress reports | — |
 | D-15 | Security and performance are first-class requirements in every milestone | [security-architecture.md](security-architecture.md) |
+| D-16 | JPA (`jakarta.persistence`) annotations are allowed in `domain`; nothing else framework-specific | [ADR-0009](adr/0009-jpa-annotations-in-domain.md) |
+| D-17 | User-assertion verification is implemented fully in M1 (RS256/ES256, JWKS, strict claims), even before Q-01 is answered | [ADR-0010](adr/0010-credentials-and-database-enforced-isolation.md) |
+| D-18 | Integration-plane URLs are tenant-implicit (`/api/v1/knowledge-bases`, `/api/v1/integration`); no integration ID in paths | [ADR-0010](adr/0010-credentials-and-database-enforced-isolation.md) |
+| D-19 | Credential headers: `X-Api-Key`, `X-User-Assertion`, `X-Admin-Key`. An end user's effective permissions are their KB role grants **intersected** with the API key's scopes. | [ADR-0010](adr/0010-credentials-and-database-enforced-isolation.md) |
 
 ### 0.3 Git workflow
 
@@ -54,11 +58,12 @@ Detailed acceptance results: [`PROJECT_PROGRESS.md`](../PROJECT_PROGRESS.md).
 
 | # | Question | Needed by |
 |---|---|---|
-| Q-01 | Can each connected system (HRIS, CRM, ERP) issue RS256/ES256 user assertions and publish a JWKS endpoint? Which issuer and audience values will they use? | M1 design (stub until then); required for user-scoped features |
+| Q-01 | Can each connected system (HRIS, CRM, ERP) issue RS256/ES256 user assertions and publish a JWKS endpoint? Which issuer and audience values will they use? (The verifier is ready since M1.) | Before user-scoped production use |
 | Q-02 | Long-term admin identity: OIDC through Keycloak or the company identity provider? | Before production |
 | Q-03 | Confirm PostgreSQL-backed jobs and outbox (ADR-0007) versus a broker | Start of M2 |
 | Q-04 | Docker storage location and disk budget for PaddleOCR image, models and page-image cache | Start of M2 |
 | Q-05 | Is time-boxed, audited platform support access to tenant content ever needed? | Before production |
+| Q-06 | Should every integration API key require an expiry (currently optional, maximum 730 days), with rotation reminders? | Before production |
 
 ---
 
@@ -204,7 +209,7 @@ A connected system is registered as an integration. An integration may own multi
 - **User-scoped calls also carry a signed user assertion:** a short-lived RS256/ES256 JWT issued by the connected system and verified against its registered JWKS endpoint (issuer, audience, expiry, signature). It must be bound to the same integration.
 - **`access` turns verified credentials into an `AccessContext`.** Core modules authorize only on that context, and RLS uses its integration ID.
 - **Platform administration is a separate plane** (`/api/v1/admin/**`). It starts with a bootstrap admin key, and admins have no default access to tenant content.
-- **Integration registration (`POST /api/v1/integrations`) is admin-only,** as are issuing keys and configuring trust settings.
+- **Integration registration (`POST /api/v1/admin/integrations`) is admin-only,** as are issuing keys and configuring trust settings.
 
 ### 4.1 Static data / document ingestion
 
@@ -331,17 +336,18 @@ Tasks:
 - Add authorization checks and tenant/integration scoping to all queries.
 - Add migrations, DTOs, validation, and API documentation.
 - Implement the `access` module: integration API-key authentication (hashed keys, rotation, revocation), a separate admin plane with the bootstrap admin key, and `AccessContext`.
-- Store per-integration trust configuration (issuer, audience, JWKS URL, claim mapping). The user-assertion verifier may be stubbed for development until Q-01 is answered.
-- Enable PostgreSQL RLS on tenant tables, with `SET LOCAL app.integration_id` per transaction.
+- Store per-integration trust configuration (issuer, audience, JWKS URL, claim mapping), and implement the RS256/ES256 user-assertion verifier fully (decision D-17).
+- Enable PostgreSQL RLS on tenant tables, with `set_config('app.integration_id', …, true)` per transaction.
 - Add KB policies: role-to-permission mapping, "search without user" opt-in (off), different-submitter rule (off).
 
-Suggested endpoints (`/admin` = platform admin plane):
-- `POST /api/v1/admin/integrations` (admin-only registration)
-- `POST /api/v1/admin/integrations/{integrationId}/api-keys` / `DELETE …/api-keys/{keyId}`
-- `GET /api/v1/integrations/{integrationId}`
-- `POST /api/v1/integrations/{integrationId}/knowledge-bases`
-- `GET /api/v1/integrations/{integrationId}/knowledge-bases`
-- `GET /api/v1/knowledge-bases/{knowledgeBaseId}`
+Implemented endpoints (tenant-implicit integration plane, decision D-18; `/admin` = platform admin plane):
+- `POST /api/v1/admin/integrations`, `GET /api/v1/admin/integrations`, `GET …/{integrationId}`, `PATCH …/{integrationId}/status`
+- `POST /api/v1/admin/integrations/{integrationId}/api-keys`, `GET …/api-keys`, `DELETE …/api-keys/{keyId}`
+- `PUT /api/v1/admin/integrations/{integrationId}/trust-config`, `GET …/trust-config`
+- `GET /api/v1/integration` (the caller's own integration)
+- `POST /api/v1/knowledge-bases`, `GET /api/v1/knowledge-bases`
+- `GET /api/v1/knowledge-bases/{knowledgeBaseId}`, `PATCH /api/v1/knowledge-bases/{knowledgeBaseId}`
+- `GET /api/v1/knowledge-bases/{knowledgeBaseId}/role-grants`, `PUT …/role-grants`
 
 Acceptance criteria:
 - Create an integration and multiple KBs.
@@ -1019,7 +1025,7 @@ A developer should be able to clone the repository, start the documented local d
 
 ## 12. First action
 
-> **Status (2026-11-23):** M0 is implemented on branch `chore/m0-architecture-baseline` and awaiting approval. See [`PROJECT_PROGRESS.md`](../PROJECT_PROGRESS.md). The original instructions below are kept for reference.
+> **Status (2026-11-23):** M0 is done. M1 is implemented on branch `feature/m1-integration-kb-foundation` and awaiting approval. See [`PROJECT_PROGRESS.md`](../PROJECT_PROGRESS.md). The original instructions below are kept for reference.
 
 Start with **M0 only**.
 

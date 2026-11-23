@@ -4,8 +4,152 @@ Milestone scope and decisions: [docs/roadmap.md](docs/roadmap.md). This file rec
 
 | Milestone | Status | Branch |
 |---|---|---|
-| M0 — Architecture baseline | ✅ Implemented and verified. **Awaiting approval and commit.** | `chore/m0-architecture-baseline` |
-| M1 – M11 | Not started | — |
+| M0 — Architecture baseline | ✅ Done (commit `d963e59`) | `chore/m0-architecture-baseline` → `main` |
+| M1 — Integrations, KBs, identity, RLS | ✅ Implemented and verified. **Awaiting approval and commit.** | `feature/m1-integration-kb-foundation` |
+| M2 – M11 | Not started | — |
+
+---
+
+## M1 — Integration and Knowledge Base foundation (identity, RLS)
+
+**Date:** 2026-11-23 · **Decisions:** D-16 to D-19 in `docs/roadmap.md` · ADR-0009, ADR-0010
+
+### Delivered
+
+- **Database (Flyway V2–V4):**
+  - `integration`, `integration_api_key` (SHA-256 of the secret only), `integration_trust_config`;
+  - `knowledge_base`, `knowledge_base_role_grant` (composite tenant FK);
+  - `audit_event` (append-only);
+  - RLS on every table: tenant content is FORCEd with no admin exception; platform tables are admin-write-only;
+  - SECURITY DEFINER functions for the pre-tenant key lookup.
+- **`shared`:**
+  - `AccessContext` / `AccessContextHolder` / `Permission`;
+  - `TenantAwareJpaTransactionManager`, which sets `app.integration_id` and `app.access_plane` per transaction;
+  - `AuditRecorder` (records in the same transaction, or independently for denials);
+  - `@CurrentAccess`, `PageQuery` / `PageResponse`, and new error types (404 / 403 / 409 / 400) in the RFC 9457 format.
+- **`integration`:** register, list and suspend integrations; issue, list and revoke API keys; trust configuration with policy validation; `ApiKeyAuthenticator` (constant-time comparison, identical rejections).
+- **`knowledgebase`:**
+  - create, list, get and update KBs (optimistic locking; archive via status);
+  - role grants with replace-set semantics;
+  - `KnowledgeBaseAccessPolicy` (scopes for services; grants ∩ scopes for users; nothing for admins).
+- **`access`:**
+  - three path-scoped filter chains (admin / integration / default);
+  - `X-Admin-Key`, `X-Api-Key` and `X-User-Assertion` authentication;
+  - RS256/ES256 JWKS verifier with strict validators, a per-integration decoder cache, and JWKS fetching with timeouts and no redirects.
+- **Dev tooling (test scope):** `DevAssertionTool` (generate keys, mint tokens).
+
+### Acceptance criteria
+
+| Criterion | Result | Evidence |
+|---|---|---|
+| Create an integration and multiple KBs | ✅ Pass | `KnowledgeBaseApiIntegrationTest`; curl demo (HRIS: 2 KBs, CRM: 1) |
+| An integration cannot access another integration's KBs | ✅ Pass | `CrossTenantIsolationIntegrationTest` (get / patch / grants / list); `RowLevelSecurityIntegrationTest` (database level) |
+| Invalid or unauthorized IDs do not leak data | ✅ Pass | Foreign and unknown IDs return byte-identical 404 bodies; malformed IDs → 400; all authentication failures return an identical 401 |
+| Integration/KB lifecycle and ownership covered by integration tests | ✅ Pass | 147 tests total, listed below |
+
+### Quality gates
+
+| Gate | Result | Details |
+|---|---|---|
+| Functional | ✅ | curl demo below |
+| Security | ✅ | Plane separation; API-key lifecycle (revoked, expired, suspended); 13 invalid user-assertion variants (HS256, `none`, issuer, audience, expired, lifetime, missing sub/exp, future iat, unpublished key, garbage, oversized, bad roles type); token signed by another integration rejected; https-only JWKS and no private keys; secrets never returned or logged |
+| Cross-tenant isolation | ✅ | API-level and SQL-level tests, including "no tenant context ⇒ 0 rows" and `WITH CHECK` on cross-tenant writes |
+| Performance | ✅ | See below |
+| Error handling | ✅ | 400 validation, oversized page, 404, 403, 409 (duplicate code, stale version), 503 if credential verification cannot reach the database |
+| Documentation | ✅ | Roadmap, architecture, security, ADR-0009/0010, README, this file |
+
+### Automated tests — `./mvnw clean verify` → **BUILD SUCCESS, 147 tests, 0 failures**
+
+| Test class | Tests | Covers |
+|---|---|---|
+| `ApiKeyCredentialTest` | 12 | Key format, uniqueness, hash comparison, malformed input, no secrets in `toString` |
+| `KnowledgeBaseAccessPolicyTest` | 5 | Scopes, grants ∩ scopes, manage ⇒ read, admin has nothing |
+| `TrustConfigurationValidationTest` | 10 | https only, no credentials in URI, inline keys policy, private-key rejection, algorithms, ranges, claim names |
+| `AdminIntegrationApiIntegrationTest` | 12 | Registration, duplicate/invalid, paging limits, one-time plaintext and stored hash, plane separation, audit |
+| `IntegrationAuthenticationIntegrationTest` | 12 | Valid, malformed, unknown, wrong secret, revoked, expired, suspended/reactivated, identical bodies, audit |
+| `UserAssertionIntegrationTest` | 23 | RS256/ES256, grants, scope intersection, cross-integration tokens, 13 invalid variants, missing trust config, inline keys refused, audit |
+| `KnowledgeBaseApiIntegrationTest` | 10 | Create/list/paginate/get/update/archive, permissions, optimistic locking, grants |
+| `CrossTenantIsolationIntegrationTest` | 5 | Same codes in two tenants, indistinguishable 404, list isolation, no foreign writes |
+| `RowLevelSecurityIntegrationTest` | 8 | Zero rows without context, own rows only, cross-tenant writes blocked, platform tables admin-write-only, admins have no content access, append-only audit, definer lookup |
+| M0 suites (architecture rules now 13) | 50 | As in M0, plus new ArchUnit rules (domain layering, `access` → `integration.application` only, JOSE confined to `access`) |
+
+### Real HTTP checks (local profile, Docker Compose PostgreSQL, migrations V2–V4 applied to the existing M0 database)
+
+```text
+POST /api/v1/admin/integrations (X-Admin-Key)            → 201 {"code":"hris-28269","status":"ACTIVE",...}
+POST /api/v1/admin/integrations/{hris}/api-keys          → 201 {"key":{"keyId":"50c2…","scopes":["KB_READ","KB_MANAGE"],...},
+                                                                "plaintextKey":"mrk_50c2…_<shown once>"}
+POST /api/v1/knowledge-bases (HRIS key) ×2, (CRM key) ×1 → 201 … "createdBy":"api-key:50c2…","yourPermissions":["KB_MANAGE","KB_READ"]
+GET  /api/v1/knowledge-bases (HRIS key)                  → totalItems 2: hr-policies, benefits
+GET  /api/v1/knowledge-bases/{CRM kb} (HRIS key)         → 404 RESOURCE_NOT_FOUND
+PUT  /api/v1/knowledge-bases/{hr-policies}/role-grants   → {"grants":[{"role":"hr-reader","permission":"KB_READ"}]}
+PUT  /api/v1/admin/integrations/{hris}/trust-config      → 200 (inline JWKS from DevAssertionTool, local profile)
+GET  /api/v1/knowledge-bases (key + assertion emp-1001, roles=[hr-reader]) → totalItems 1: hr-policies, yourPermissions ["KB_READ"]
+GET  /api/v1/knowledge-bases/{hr-policies} (assertion emp-2002, roles=[sales]) → 404
+HRIS assertion presented with the CRM key                → 401
+Tampered assertion                                       → 401
+DELETE …/api-keys/{keyId}, then reuse that key           → 200, then 401 AUTHENTICATION_REQUIRED
+Admin key on /api/v1/knowledge-bases; CRM key on /api/v1/admin/integrations → 401; 401
+```
+
+Demo commands for reproduction:
+
+```bash
+./mvnw -q test-compile dependency:build-classpath -Dmdep.includeScope=test -Dmdep.outputFile=cp.txt
+java -cp "$(cat cp.txt);target/test-classes;target/classes" com.mimocodes.mimorag.devtools.DevAssertionTool keygen ./.dev-issuer
+java -cp "$(cat cp.txt);target/test-classes;target/classes" com.mimocodes.mimorag.devtools.DevAssertionTool \
+     mint ./.dev-issuer https://hris.local mimorag emp-1001 hr-reader
+```
+
+(Use `:` instead of `;` as the classpath separator on Linux/macOS. Keep `.dev-issuer/` out of Git; it contains a private key.)
+
+### Performance (sequential curl, n = 100 after 10 warm-up requests, local profile)
+
+| Request path | p50 | p95 | M0 baseline (p50 / p95) |
+|---|---|---|---|
+| `GET /actuator/health` | 8.4 ms | 12.6 ms | 9.5 / 11.2 ms |
+| 401 without credentials | 3.1 ms | 4.1 ms | 3.4 / 4.0 ms |
+| `GET /api/v1/integration` (API key + 1 RLS transaction) | 13.2 ms | 15.9 ms | — |
+| `GET /api/v1/knowledge-bases/{id}` (service) | 13.1 ms | 16.0 ms | — |
+| `GET /api/v1/knowledge-bases` (list, service) | 13.3 ms | 16.8 ms | — |
+| `GET /api/v1/knowledge-bases/{id}` (API key + JWT, warm key cache) | 20.3 ms | 24.8 ms | — |
+| `GET /api/v1/knowledge-bases` (list, API key + JWT) | 20.0 ms | 24.7 ms | — |
+| 401 for an unknown API key (lookup + dummy hash) | 8.8 ms | 12.8 ms | — |
+| `GET /api/v1/admin/integrations` (page of 20) | 10.3 ms | 12.9 ms | — |
+| Startup (V2–V4 migrations included) | 12.4 s | | 9.8 s |
+| JVM working set after the run | 322 MB | | 254 MB |
+| PostgreSQL container memory | 48 MiB | | 54 MiB |
+
+**Analysis:**
+- API-key authentication plus the tenant-scoped transaction adds about 10 ms over an unauthenticated request. That covers the credential lookup, `set_config`, the query, and the audit-free path.
+- JWT verification adds about 7 ms (RSA signature check and the trust-configuration read).
+- Health and unauthenticated paths are unchanged from M0.
+
+### Implementation review
+
+1. **Clean Code / SOLID:**
+   - Thin controllers; use cases in application services that receive `AccessContext` explicitly.
+   - Small policy classes: `KnowledgeBaseAccessPolicy`, `ApiKeyCredential`, the decoder factory.
+   - `IntegrationAuthenticator` and `UserAssertionVerifier` are replaceable, and the core never sees tokens.
+   - Ports are narrow repository interfaces.
+2. **Intentional deviations:**
+   - JPA annotations in `domain` (ADR-0009).
+   - Application views are returned directly as response bodies.
+   - `TrustConfigurationService` uses Jackson (not Nimbus) to sanity-check inline JWKS, because JOSE libraries are confined to `access`.
+3. **Module dependencies:** `access → integration.application, shared`; `integration → shared`; `knowledgebase → shared`. No cycles (ArchUnit).
+4. **Tests:** 147 tests, listed above.
+5. **Technical debt / follow-ups:**
+   - Rate limiting is not yet applied to authentication failures (M2+).
+   - Unknown-key failures are logged but not audited, deliberately to avoid audit flooding. Revisit together with rate limiting.
+   - The JWKS decoder cache is unbounded (one entry per integration, acceptable for now).
+   - No `jti` replay cache yet; add with the first write operation that accepts user assertions.
+   - The Mockito self-attach warning on JDK 24 remains.
+
+### Known limitations
+
+- No document upload, extraction or review yet (M2/M3).
+- API keys may be issued without expiry (maximum 730 days when set). See Q-06.
+- Q-01 is still open: connected systems must publish RS256/ES256 JWKS before user-scoped production use.
 
 ---
 

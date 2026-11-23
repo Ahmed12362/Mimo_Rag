@@ -1,6 +1,6 @@
 # MimoRag — Architecture Baseline
 
-> Status: **M0 baseline** (2026-11-23). Scope and milestone status live in [roadmap.md](roadmap.md); decisions are recorded as ADRs in [adr/](adr/).
+> Status: **M0 baseline + M1** (2026-11-23). Scope and milestone status live in [roadmap.md](roadmap.md); decisions are recorded as ADRs in [adr/](adr/).
 > Related: [security-architecture.md](security-architecture.md) · [workflows/document-review.md](workflows/document-review.md)
 
 ## 1. Context
@@ -55,7 +55,7 @@ Root package: `com.mimocodes.mimorag`.
 
 | Module | Responsibility | Milestone |
 |---|---|---|
-| `shared` | Error format (RFC 9457), correlation IDs, required-settings checks, later `AccessContext` + permission vocabulary, clock/IDs. **No business logic, depends on no feature module.** | M0 |
+| `shared` | Error format (RFC 9457), correlation IDs, required-settings checks, `AccessContext` + `AccessContextHolder` + permission vocabulary, tenant-aware transaction manager (RLS settings), audit recorder, pagination, clock. **No business logic, depends on no feature module.** | M0, M1 |
 | `access` | Edge adapters: Spring Security filter chains, integration API-key authentication, user-assertion (JWT) verification, admin authentication. Produces `AccessContext`. The **only** module that knows about identity providers, JWT libraries or Spring Security. | M0 (baseline), M1 |
 | `integration` | Integrations (tenants), credential records (hashed), trust configuration (issuer, audience, JWKS URL, claim mapping), lifecycle. | M1 |
 | `knowledgebase` | KBs, ownership, KB policies (access rules, review rules, service-identity search opt-in). | M1 |
@@ -81,14 +81,17 @@ infrastructure (JPA repositories, HTTP clients, provider adapters) ──impleme
 1. No dependency cycles between top-level modules.
 2. `shared` depends on no feature module (and not on `access`).
 3. Core modules (`integration` … `evaluation`) do not depend on `access`, Spring Security or JWT libraries.
-4. `..domain..` packages do not depend on Spring, JPA/Hibernate, Jackson or Servlet APIs.
-5. `..api..` does not depend on `..infrastructure..`; `..application..` does not depend on `..api..`.
-6. `@RestController`s live in `..api..` (or `access`) and never use repositories directly.
-7. No field injection; no `java.util.logging`.
+4. `..domain..` packages do not depend on Spring, Hibernate, Jackson or Servlet APIs. `jakarta.persistence` mapping annotations are allowed ([ADR-0009](adr/0009-jpa-annotations-in-domain.md)).
+5. `..domain..` does not depend on `..application..`, `..api..` or `..infrastructure..`.
+6. `..api..` does not depend on `..infrastructure..`; `..application..` does not depend on `..api..`.
+7. `@RestController`s live in `..api..` (or `access`) and never use repositories directly.
+8. `access` uses the `integration` module only through `integration.application`.
+9. JOSE/JWT libraries (`com.nimbusds`, `spring-security-oauth2`) are used only inside `access`.
+10. No field injection; no `java.util.logging`.
 
 Rules that target modules not yet implemented use `allowEmptyShould(true)`, so they start protecting each module the moment its first class appears.
 
-**Known trade-off (rule 4):** keeping JPA annotations out of `domain` means JPA entities live in `infrastructure` and are mapped to domain objects. This costs some mapping code. We will revisit it in M1 with real entities; any relaxation will be an explicit ADR, not a silent change.
+**Persistence ports (M1):** each module declares narrow Spring Data `Repository<T, ID>` interfaces in its `application` package, listing only the methods its use cases need. Pre-tenant JDBC (the SECURITY DEFINER credential lookup) lives in `infrastructure`. Application views (immutable records without secrets) are returned directly as API response bodies.
 
 ## 5. Data and migrations
 

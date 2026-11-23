@@ -21,3 +21,6 @@ springdoc:
 mimorag:
   security:
     public-api-docs: true
+    trust:
+      allow-insecure-jwks: true
+      allow-inline-jwks: true

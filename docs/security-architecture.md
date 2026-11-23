@@ -1,6 +1,6 @@
 # MimoRag — Security Architecture
 
-> Status: **design baseline** (M0, 2026-11-23). M0 implements only the deny-by-default baseline, the database role model, the error hygiene and correlation IDs. Everything else is implemented in the milestone named next to it.
+> Status: **design baseline** (M0, 2026-11-23), **identity and tenant isolation implemented in M1** (see §8). Everything else is implemented in the milestone named next to it. M1 implementation details: [ADR-0010](adr/0010-credentials-and-database-enforced-isolation.md).
 > Decisions: [ADR-0004](adr/0004-tenant-isolation-and-row-level-security.md), [ADR-0005](adr/0005-identity-and-access-model.md), [ADR-0006](adr/0006-tenant-owned-document-review.md).
 
 Guiding principle: **the platform answers only within the caller's permissions and the data available to them, and refuses when evidence is insufficient.** Authorization is always decided by platform code, never by an LLM.
@@ -86,6 +86,7 @@ record AccessContext(
 - Built only by `access`. **The LLM can never create or modify it.**
 - Permission checks happen in **application services**, not only in controllers. Planned permissions: `KB_READ`, `KB_MANAGE`, `DOCUMENT_UPLOAD`, `DOCUMENT_REVIEW`, `DOCUMENT_SUBMIT`, `TOOL_EXECUTE`, `TOOL_CATALOG_MANAGE`.
 - KB policies map opaque integration roles to permissions (e.g. "`hr-policy-editors` → `DOCUMENT_REVIEW`").
+- **Effective permissions of an end user = KB role grants ∩ API-key scopes** (M1, [ADR-0010](adr/0010-credentials-and-database-enforced-isolation.md)). A narrowly scoped key therefore cannot carry broader user rights.
 
 ### 2.6 Service identities (system-to-system and background work)
 
@@ -199,3 +200,22 @@ These events are audited, as append-only records with integration, principal, ac
 | Least-privilege database role (no DDL, `NOBYPASSRLS`, no access to migration history) | `docker/postgres/initdb`, `V1__baseline.sql` | `DatabaseRolesIntegrationTest` |
 | No secrets in repo; fail fast on missing settings, reporting names only | `.gitignore`, `.env.example`, `RequiredSettingsVerifier` | `RequiredSettingsVerifierTest` |
 | Health shows no internal details anonymously | `application.yml` | `HealthEndpointIntegrationTest` |
+
+### Implemented in M1
+
+| Control | Where | Verified by |
+|---|---|---|
+| Separate admin and integration planes; each recognises only its own credential | `access.web.SecurityConfiguration` | `AdminIntegrationApiIntegrationTest` |
+| Admin key stored only as SHA-256, constant-time comparison; plane disabled when unset | `AdminKeyAuthenticationFilter`, `AccessSecurityProperties` | `AdminIntegrationApiIntegrationTest` |
+| API keys: 256-bit secrets, only the hash stored, plaintext shown once, revocation, expiry, suspension | `integration.domain.ApiKeyCredential`, `ApiKeyAuthenticator` | `ApiKeyCredentialTest`, `IntegrationAuthenticationIntegrationTest` |
+| Identical 401 for every authentication failure; reason only in logs and audit | `IntegrationAuthenticationFilter` | `IntegrationAuthenticationIntegrationTest` |
+| Pre-tenant key lookup without relaxing RLS (SECURITY DEFINER) | `V2__integrations_and_credentials.sql` | `RowLevelSecurityIntegrationTest` |
+| User assertions: RS256/ES256 only, JWKS from the same integration, strict claims, lifetime cap, size limit | `access.assertion.*` | `UserAssertionIntegrationTest` (13 invalid-token variants) |
+| Trust configuration: https JWKS only in production, no private keys, inline keys only in local | `TrustConfigurationService` | `TrustConfigurationValidationTest` |
+| Tenant from credential only; tenant-implicit URLs; foreign IDs return the same 404 as unknown IDs | `KnowledgeBaseService` | `CrossTenantIsolationIntegrationTest` |
+| User permissions = KB role grants ∩ API-key scopes; admins have no tenant content access | `KnowledgeBaseAccessPolicy` | `KnowledgeBaseAccessPolicyTest`, `UserAssertionIntegrationTest` |
+| PostgreSQL RLS: no context ⇒ zero rows; `WITH CHECK` blocks cross-tenant writes; composite tenant FKs | `V3__knowledge_bases.sql`, `TenantAwareJpaTransactionManager` | `RowLevelSecurityIntegrationTest` |
+| Append-only audit trail (UPDATE/DELETE revoked) for admin actions, KB changes, denials, auth failures | `V4__audit_events.sql`, `JdbcAuditRecorder` | `AdminIntegrationApiIntegrationTest`, `RowLevelSecurityIntegrationTest` |
+| Optimistic locking on KB updates | `KnowledgeBase` `@Version` | `KnowledgeBaseApiIntegrationTest` |
+
+**Not yet implemented (planned):** rate limiting and quotas (M2+), `jti` replay cache for write operations, admin OIDC login, audit read API.

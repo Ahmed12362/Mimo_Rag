@@ -12,5 +12,7 @@ Each ADR records one decision: its context, the decision, and its consequences. 
 | [0006](0006-tenant-owned-document-review.md) | Tenant-owned document review with immutable snapshots | Accepted |
 | [0007](0007-async-jobs-and-transactional-outbox.md) | Async jobs and transactional outbox in PostgreSQL | Proposed (confirm in M2) |
 | [0008](0008-api-error-format-correlation-and-logging.md) | API error format, correlation IDs and logging | Accepted |
+| [0009](0009-jpa-annotations-in-domain.md) | JPA annotations allowed in domain classes | Accepted (amends 0001) |
+| [0010](0010-credentials-and-database-enforced-isolation.md) | Credential formats and database-enforced isolation | Accepted |
 
 Template: `# ADR-NNNN: Title` → **Status**, **Date**, **Context**, **Decision**, **Consequences**.

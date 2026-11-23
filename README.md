@@ -45,6 +45,34 @@ curl -i http://localhost:8080/api/v1/anything            # 401 application/probl
 open  http://localhost:8080/swagger-ui.html              # local profile only
 ```
 
+## Use the API (M1)
+
+```bash
+# Admin key: generate once, keep the key secret, put only its SHA-256 into .env (MIMORAG_ADMIN_KEY_SHA256)
+ADMIN_KEY=$(openssl rand -base64 32 | tr -d '=+/'); printf '%s' "$ADMIN_KEY" | sha256sum
+
+# 1. Register an integration (admin plane)
+curl -X POST localhost:8080/api/v1/admin/integrations -H "X-Admin-Key: $ADMIN_KEY" \
+  -H 'Content-Type: application/json' -d '{"code":"hris","name":"HRIS"}'
+
+# 2. Issue an API key for it. The plaintext key is returned ONCE.
+curl -X POST localhost:8080/api/v1/admin/integrations/<integrationId>/api-keys -H "X-Admin-Key: $ADMIN_KEY" \
+  -H 'Content-Type: application/json' -d '{"name":"hris-backend","scopes":["KB_MANAGE","KB_READ"]}'
+
+# 3. As the integration: create and list Knowledge Bases (the tenant comes from the key)
+curl -X POST localhost:8080/api/v1/knowledge-bases -H "X-Api-Key: mrk_..." \
+  -H 'Content-Type: application/json' -d '{"code":"hr-policies","name":"HR Policies"}'
+curl localhost:8080/api/v1/knowledge-bases -H "X-Api-Key: mrk_..."
+
+# 4. On behalf of an end user: add a signed user assertion (RS256/ES256 JWT from the integration)
+curl localhost:8080/api/v1/knowledge-bases -H "X-Api-Key: mrk_..." -H "X-User-Assertion: eyJ..."
+```
+
+User assertions are verified against the integration's trust configuration
+(`PUT /api/v1/admin/integrations/{id}/trust-config`). In production that is an `https` JWKS URI. The `local` profile also accepts
+inline public keys. For manual testing, `src/test/java/.../devtools/DevAssertionTool` can generate a key pair and mint
+tokens (see `PROJECT_PROGRESS.md`, M1).
+
 ## Test
 
 ```bash
@@ -62,6 +90,7 @@ All settings come from environment variables. In the `local` profile they can al
 | `MIMORAG_DB_OWNER_PASSWORD` | yes | Password of the migration role `mimorag_owner` |
 | `MIMORAG_DB_APP_USER` / `MIMORAG_DB_OWNER_USER` | no | Role names (default `mimorag_app` / `mimorag_owner`) |
 | `MIMORAG_DB_POOL_SIZE` | no | Connection pool size (default 10) |
+| `MIMORAG_ADMIN_KEY_SHA256` | no | Hex SHA-256 of the platform-admin key. Empty disables the admin API. |
 | `MIMORAG_DB_PORT`, `POSTGRES_*` | local only | Docker Compose container settings |
 
 Never commit `.env` or real secrets.

@@ -45,6 +45,12 @@ class ProblemDetailSecurityErrorHandler implements AuthenticationEntryPoint, Acc
 				"You are not allowed to perform this operation."));
 	}
 
+	/** Credential verification could not run (e.g. database unavailable): fail closed, but report it honestly. */
+	void writeServiceUnavailable(HttpServletResponse response) throws IOException {
+		write(response, ApiProblems.of(HttpStatus.SERVICE_UNAVAILABLE, ApiErrorCode.SERVICE_UNAVAILABLE,
+				"The service is temporarily unavailable. Retry later."));
+	}
+
 	private void write(HttpServletResponse response, ProblemDetail problem) throws IOException {
 		response.setStatus(problem.getStatus());
 		response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);

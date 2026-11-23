@@ -9,9 +9,13 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 /**
  * Base class for integration tests that need the full application context and a real PostgreSQL database.
  * One container is shared by all subclasses (singleton pattern) to keep the suite fast; Ryuk removes it when
- * the JVM exits.
+ * the JVM exits. All subclasses use identical properties so the Spring context is cached and shared too.
+ * <p>
+ * {@code allow-insecure-jwks} is enabled only because the tests serve JWKS from a local HTTP server; the https
+ * requirement itself is covered by unit tests.
  */
-@SpringBootTest
+@SpringBootTest(properties = { "mimorag.security.admin-key-sha256=" + TestCredentials.ADMIN_KEY_SHA256,
+		"mimorag.security.trust.allow-insecure-jwks=true", "mimorag.security.trust.allow-inline-jwks=false" })
 @AutoConfigureMockMvc
 public abstract class PostgresIntegrationTest {
 

@@ -18,6 +18,11 @@ build/
 *.key
 *.p12
 *.jks
+GENERIC_RAG_PLATFORM_ROADMAP (1).md
+# DevAssertionTool output (contains a private signing key) and generated classpath files
+.dev-issuer/
+private-jwk.json
+cp.txt
 
 ### Local data: uploads, page images, model files, real documents ###
 storage/

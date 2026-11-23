@@ -78,3 +78,9 @@ springdoc:
 mimorag:
   security:
     public-api-docs: false
+    # Hex SHA-256 of the bootstrap platform-admin key. Empty = admin plane disabled (every admin call gets 401).
+    admin-key-sha256: ${MIMORAG_ADMIN_KEY_SHA256:}
+    trust:
+      # Production integrations must publish an https JWKS endpoint; these relaxations are for local development.
+      allow-insecure-jwks: false
+      allow-inline-jwks: false

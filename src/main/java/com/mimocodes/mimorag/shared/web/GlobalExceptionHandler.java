@@ -3,10 +3,16 @@ package com.mimocodes.mimorag.shared.web;
 import java.util.Comparator;
 import java.util.List;
 
+import jakarta.persistence.OptimisticLockException;
 import jakarta.validation.ConstraintViolationException;
 
+import com.mimocodes.mimorag.shared.error.ConflictException;
+import com.mimocodes.mimorag.shared.error.InvalidRequestException;
+import com.mimocodes.mimorag.shared.error.OperationNotPermittedException;
+import com.mimocodes.mimorag.shared.error.ResourceNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -56,6 +62,38 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 			.sorted(Comparator.comparing(ValidationViolation::field))
 			.toList();
 		return ResponseEntity.badRequest().body(ApiProblems.validationFailed(violations));
+	}
+
+	@ExceptionHandler(InvalidRequestException.class)
+	ResponseEntity<ProblemDetail> handleInvalidRequest(InvalidRequestException ex) {
+		return ResponseEntity.badRequest().body(ApiProblems.validationFailed(ex.getViolations()));
+	}
+
+	@ExceptionHandler(ResourceNotFoundException.class)
+	ResponseEntity<ProblemDetail> handleNotFound(ResourceNotFoundException ex) {
+		return ResponseEntity.status(HttpStatus.NOT_FOUND)
+			.body(ApiProblems.of(HttpStatus.NOT_FOUND, ApiErrorCode.RESOURCE_NOT_FOUND,
+					"The requested resource was not found."));
+	}
+
+	@ExceptionHandler(OperationNotPermittedException.class)
+	ResponseEntity<ProblemDetail> handleNotPermitted(OperationNotPermittedException ex) {
+		return ResponseEntity.status(HttpStatus.FORBIDDEN)
+			.body(ApiProblems.of(HttpStatus.FORBIDDEN, ApiErrorCode.ACCESS_DENIED,
+					"You are not allowed to perform this operation."));
+	}
+
+	@ExceptionHandler(ConflictException.class)
+	ResponseEntity<ProblemDetail> handleConflict(ConflictException ex) {
+		return ResponseEntity.status(HttpStatus.CONFLICT)
+			.body(ApiProblems.of(HttpStatus.CONFLICT, ApiErrorCode.CONFLICT, ex.getMessage()));
+	}
+
+	@ExceptionHandler({ ObjectOptimisticLockingFailureException.class, OptimisticLockException.class })
+	ResponseEntity<ProblemDetail> handleOptimisticLock(Exception ex) {
+		return ResponseEntity.status(HttpStatus.CONFLICT)
+			.body(ApiProblems.of(HttpStatus.CONFLICT, ApiErrorCode.CONFLICT,
+					"The resource was modified concurrently. Reload it and retry with the current version."));
 	}
 
 	@ExceptionHandler(Exception.class)
