@@ -40,6 +40,16 @@ public final class TestTokens {
 		}
 	}
 
+	/** A 1024-bit RSA key: below the platform minimum, used to prove weak keys are rejected. */
+	public static RSAKey newWeakRsaKey() {
+		try {
+			return new RSAKeyGenerator(1024, true).keyID(UUID.randomUUID().toString()).generate();
+		}
+		catch (JOSEException ex) {
+			throw new IllegalStateException(ex);
+		}
+	}
+
 	public static ECKey newEcKey() {
 		try {
 			return new ECKeyGenerator(Curve.P_256).keyID(UUID.randomUUID().toString()).generate();
@@ -132,7 +142,8 @@ public final class TestTokens {
 
 		private static JWSSigner signer(JWK key) {
 			try {
-				return key instanceof RSAKey rsa ? new RSASSASigner(rsa) : new ECDSASigner((ECKey) key);
+				return key instanceof RSAKey rsa ? new RSASSASigner(rsa.toPrivateKey(), true)
+						: new ECDSASigner((ECKey) key);
 			}
 			catch (JOSEException ex) {
 				throw new IllegalStateException(ex);

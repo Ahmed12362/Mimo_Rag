@@ -61,6 +61,12 @@ class TrustConfigurationValidationTest {
 	}
 
 	@Test
+	void rejectsWeakRsaKeysEvenInLocalDevelopment() {
+		assertViolation(() -> localDevelopment
+			.validate(settings(null, TestTokens.publicJwks(TestTokens.newWeakRsaKey()), List.of("RS256"))), "inlineJwks");
+	}
+
+	@Test
 	void rejectsUnsupportedAlgorithms() {
 		assertViolation(() -> production.validate(settings("https://h.example.com/jwks", null, List.of("HS256"))),
 				"allowedAlgorithms");

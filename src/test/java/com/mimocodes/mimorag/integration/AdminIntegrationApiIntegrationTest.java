@@ -1,5 +1,7 @@
 package com.mimocodes.mimorag.integration;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -61,9 +63,11 @@ class AdminIntegrationApiIntegrationTest extends PostgresIntegrationTest {
 	void adminRegistersIntegrationAndReadsItBack() throws Exception {
 		String code = ApiTestClient.uniqueCode("hris");
 		JsonNode created = api.readJson(api.admin(post("/api/v1/admin/integrations"))
-			.content(api.toJson(Map.of("code", code, "name", "HRIS", "description", "Human resources"))), 201);
+			.content(api.toJson(Map.of("code", code, "name", "HRIS", "description", "Human resources",
+					"allowedScopes", List.of("KB_READ", "DOCUMENT_UPLOAD")))), 201);
 
 		assertThat(created.get("status").asString()).isEqualTo("ACTIVE");
+		assertThat(created.get("allowedScopes").toString()).contains("KB_READ", "DOCUMENT_UPLOAD");
 		mockMvc.perform(api.admin(get("/api/v1/admin/integrations/{id}", created.get("id").asString())))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.code").value(code));
@@ -79,7 +83,7 @@ class AdminIntegrationApiIntegrationTest extends PostgresIntegrationTest {
 		api.createIntegration(code);
 
 		mockMvc.perform(api.admin(post("/api/v1/admin/integrations"))
-			.content(api.toJson(Map.of("code", code, "name", "again"))))
+			.content(api.toJson(Map.of("code", code, "name", "again", "allowedScopes", List.of("KB_READ")))))
 			.andExpect(status().isConflict())
 			.andExpect(jsonPath("$.errorCode").value("CONFLICT"));
 	}
@@ -128,17 +132,30 @@ class AdminIntegrationApiIntegrationTest extends PostgresIntegrationTest {
 	}
 
 	@Test
-	void keyWithoutScopesOrWithPastExpiryIsRejected() throws Exception {
+	void adminCanOnlyIssueShortLivedRotationOnlyBootstrapKeys() throws Exception {
 		UUID integrationId = api.createIntegration(ApiTestClient.uniqueCode("hr"));
 
+		JsonNode issued = api.readJson(api.admin(post("/api/v1/admin/integrations/{id}/bootstrap-keys", integrationId))
+			.content(api.toJson(Map.of("name", "handover"))), 201);
+		JsonNode key = issued.get("key");
+		assertThat(key.get("keyType").asString()).isEqualTo("BOOTSTRAP");
+		assertThat(key.get("scopes").toString()).isEqualTo("[\"KEY_ROTATE\"]");
+		assertThat(Instant.parse(key.get("expiresAt").asString()))
+			.isBefore(Instant.parse(key.get("createdAt").asString()).plus(Duration.ofHours(24).plusSeconds(1)));
+
+		// There is no admin endpoint that creates content keys any more.
 		mockMvc.perform(api.admin(post("/api/v1/admin/integrations/{id}/api-keys", integrationId))
-			.content(api.toJson(Map.of("name", "k", "scopes", List.of()))))
-			.andExpect(status().isBadRequest());
-		mockMvc.perform(api.admin(post("/api/v1/admin/integrations/{id}/api-keys", integrationId))
-			.content(api.toJson(
-					Map.of("name", "k", "scopes", List.of("KB_READ"), "expiresAt", "2020-01-01T00:00:00Z"))))
+			.content(api.toJson(Map.of("name", "k", "scopes", List.of("KB_MANAGE")))))
+			.andExpect(status().isMethodNotAllowed());
+	}
+
+	@Test
+	void scopeCeilingCannotContainKeyRotate() throws Exception {
+		mockMvc.perform(api.admin(post("/api/v1/admin/integrations"))
+			.content(api.toJson(Map.of("code", ApiTestClient.uniqueCode("x"), "name", "x", "allowedScopes",
+					List.of("KB_READ", "KEY_ROTATE")))))
 			.andExpect(status().isBadRequest())
-			.andExpect(jsonPath("$.violations[0].field").value("expiresAt"));
+			.andExpect(jsonPath("$.violations[0].field").value("allowedScopes"));
 	}
 
 	@Test
@@ -170,13 +187,13 @@ class AdminIntegrationApiIntegrationTest extends PostgresIntegrationTest {
 	@Test
 	void adminActionsAreAudited() throws Exception {
 		UUID integrationId = api.createIntegration(ApiTestClient.uniqueCode("aud"));
-		IssuedKey key = api.issueKey(integrationId, "KB_READ");
-		api.revokeKey(integrationId, key.keyId());
+		IssuedKey bootstrap = api.issueBootstrapKey(integrationId);
+		api.revokeKey(integrationId, bootstrap.keyId());
 
 		List<String> actions = db.as(ADMIN,
 				jdbc -> jdbc.queryForList("select action from audit_event where target_id in (?, ?) order by occurred_at",
-						String.class, integrationId.toString(), key.keyId()));
-		assertThat(actions).containsExactly("INTEGRATION_REGISTERED", "API_KEY_ISSUED", "API_KEY_REVOKED");
+						String.class, integrationId.toString(), bootstrap.keyId()));
+		assertThat(actions).containsExactly("INTEGRATION_REGISTERED", "BOOTSTRAP_KEY_ISSUED", "API_KEY_REVOKED");
 	}
 
 	@Test

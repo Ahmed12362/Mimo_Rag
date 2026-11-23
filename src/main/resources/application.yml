@@ -84,3 +84,12 @@ mimorag:
       # Production integrations must publish an https JWKS endpoint; these relaxations are for local development.
       allow-insecure-jwks: false
       allow-inline-jwks: false
+    assertion:
+      # A key removed from an integration's JWKS stays trusted at most this long.
+      jwks-cache-ttl: PT5M
+      # At most one re-fetch per interval when a token names an unknown key id.
+      jwks-refresh-min-interval: PT30S
+      jwks-connect-timeout: PT2S
+      jwks-read-timeout: PT3S
+      jwks-max-bytes: 51200
+      min-rsa-key-bits: 2048

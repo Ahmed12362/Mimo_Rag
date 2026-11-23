@@ -4,6 +4,7 @@ A generic, multi-tenant RAG platform for our company systems (HRIS, CRM, ERP, �
 
 - Roadmap, status and decisions: [docs/roadmap.md](docs/roadmap.md)
 - Architecture: [docs/architecture.md](docs/architecture.md) · Security: [docs/security-architecture.md](docs/security-architecture.md)
+- Local resources (WSL memory cap, Ollama settings, disk budget): [docs/local-environment.md](docs/local-environment.md)
 - Document review workflow: [docs/workflows/document-review.md](docs/workflows/document-review.md) · ADRs: [docs/adr/](docs/adr/)
 - Progress and acceptance results: [PROJECT_PROGRESS.md](PROJECT_PROGRESS.md)
 
@@ -53,11 +54,17 @@ ADMIN_KEY=$(openssl rand -base64 32 | tr -d '=+/'); printf '%s' "$ADMIN_KEY" | s
 
 # 1. Register an integration (admin plane)
 curl -X POST localhost:8080/api/v1/admin/integrations -H "X-Admin-Key: $ADMIN_KEY" \
-  -H 'Content-Type: application/json' -d '{"code":"hris","name":"HRIS"}'
+  -H 'Content-Type: application/json' \
+  -d '{"code":"hris","name":"HRIS","allowedScopes":["KB_READ","KB_MANAGE","DOCUMENT_UPLOAD"]}'
 
-# 2. Issue an API key for it. The plaintext key is returned ONCE.
-curl -X POST localhost:8080/api/v1/admin/integrations/<integrationId>/api-keys -H "X-Admin-Key: $ADMIN_KEY" \
-  -H 'Content-Type: application/json' -d '{"name":"hris-backend","scopes":["KB_MANAGE","KB_READ"]}'
+# 2. Hand it over: a bootstrap key (KEY_ROTATE only, valid 24h, single use). Returned ONCE.
+curl -X POST localhost:8080/api/v1/admin/integrations/<integrationId>/bootstrap-keys -H "X-Admin-Key: $ADMIN_KEY" \
+  -H 'Content-Type: application/json' -d '{"name":"handover"}'
+
+# 2b. The integration exchanges it for its own key (scopes within the ceiling; expiry 90 days by default,
+#     max 365). The bootstrap key is revoked automatically. Rotate later the same way with a KEY_ROTATE key.
+curl -X POST localhost:8080/api/v1/integration/api-keys -H "X-Api-Key: mrk_<bootstrap>" \
+  -H 'Content-Type: application/json' -d '{"name":"hris-backend","scopes":["KB_MANAGE","KB_READ","KEY_ROTATE"]}'
 
 # 3. As the integration: create and list Knowledge Bases (the tenant comes from the key)
 curl -X POST localhost:8080/api/v1/knowledge-bases -H "X-Api-Key: mrk_..." \

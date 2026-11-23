@@ -1,5 +1,7 @@
 package com.mimocodes.mimorag.access.web;
 
+import java.time.Clock;
+
 import jakarta.servlet.DispatcherType;
 
 import com.mimocodes.mimorag.access.assertion.UserAssertionVerifier;
@@ -49,11 +51,11 @@ class SecurityConfiguration {
 	@Order(2)
 	SecurityFilterChain integrationPlaneSecurityFilterChain(HttpSecurity http,
 			ProblemDetailSecurityErrorHandler errorHandler, ApiKeyAuthenticator apiKeyAuthenticator,
-			UserAssertionVerifier userAssertionVerifier, AuditRecorder audit) throws Exception {
+			UserAssertionVerifier userAssertionVerifier, AuditRecorder audit, Clock clock) throws Exception {
 		applyStatelessDefaults(http, errorHandler);
 		http.securityMatcher("/api/v1/**")
 			.addFilterBefore(new IntegrationAuthenticationFilter(apiKeyAuthenticator, userAssertionVerifier, audit,
-					errorHandler), AnonymousAuthenticationFilter.class)
+					errorHandler, clock), AnonymousAuthenticationFilter.class)
 			.authorizeHttpRequests(authorize -> authorize.anyRequest()
 				.hasRole(AccessContextAuthentication.ROLE_INTEGRATION));
 		return http.build();

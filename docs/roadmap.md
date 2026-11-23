@@ -15,7 +15,8 @@ _Last updated: 2026-11-23._
 | Milestone | Status |
 |---|---|
 | M0 — Repository inspection and architecture baseline | ✅ Done (committed `d963e59`; `main` created at this commit) |
-| M1 — Integration and Knowledge Base foundation (identity, RLS) | **Implemented on `feature/m1-integration-kb-foundation`. Awaiting approval and commit.** |
+| M1 — Integration and Knowledge Base foundation (identity, RLS) | ✅ Done (`5db21e9` on `main`) |
+| M1 hardening — key lifecycle, KB-restricted keys, review fixes | **Implemented on `fix/m1-hardening`. Awaiting approval and commit.** |
 | M2 — PDF upload and extraction | Not started (reassess Docker disk usage first) |
 | M3 — Review, submit and approved snapshot (API-first) | Not started |
 | M4 — Chunking, embeddings, indexing | Not started |
@@ -37,7 +38,7 @@ Detailed acceptance results: [`PROJECT_PROGRESS.md`](../PROJECT_PROGRESS.md).
 | D-07 | Search or chat without a user: disabled by default, per-KB opt-in. Service identities are narrowly scoped, audited and never bypass RLS. | [ADR-0005](adr/0005-identity-and-access-model.md) |
 | D-08 | Document review is a tenant-owned core feature with an immutable approved snapshot before ingestion. No platform reviewer role. Separate `DOCUMENT_REVIEW` / `DOCUMENT_SUBMIT` permissions. Optional per-KB different-submitter rule (off by default). | [ADR-0006](adr/0006-tenant-owned-document-review.md) |
 | D-09 | Review UI: API-first in M3, embeddable UI as a separate milestone after M4, using short-lived review session tokens (one tenant, one document, one user; replay-protected) | [workflows/document-review.md](workflows/document-review.md) |
-| D-10 | Async jobs and outbox in PostgreSQL, no broker (proposed; confirm in M2) | [ADR-0007](adr/0007-async-jobs-and-transactional-outbox.md) |
+| D-10 | Async jobs in PostgreSQL, no broker, **no outbox table** (the job table is the outbox); `JobQueue` interface keeps a broker possible later | [ADR-0011](adr/0011-postgresql-job-queue-without-outbox.md) |
 | D-11 | RFC 9457 errors with `errorCode` and `correlationId`; JSON logs; no internals in responses | [ADR-0008](adr/0008-api-error-format-correlation-and-logging.md) |
 | D-12 | Development machine: 16 GB RAM, 2 GB VRAM. Lightweight local models, CPU PaddleOCR, benchmark before choosing. Check free disk space before any large download. Docker storage stays on C: for M0 and is reassessed before M2. | — |
 | D-13 | OCR corpus: synthetic Arabic/English PDFs (scanned, digital, mixed). Real company documents only with authorization, and never committed. | — |
@@ -47,6 +48,12 @@ Detailed acceptance results: [`PROJECT_PROGRESS.md`](../PROJECT_PROGRESS.md).
 | D-17 | User-assertion verification is implemented fully in M1 (RS256/ES256, JWKS, strict claims), even before Q-01 is answered | [ADR-0010](adr/0010-credentials-and-database-enforced-isolation.md) |
 | D-18 | Integration-plane URLs are tenant-implicit (`/api/v1/knowledge-bases`, `/api/v1/integration`); no integration ID in paths | [ADR-0010](adr/0010-credentials-and-database-enforced-isolation.md) |
 | D-19 | Credential headers: `X-Api-Key`, `X-User-Assertion`, `X-Admin-Key`. An end user's effective permissions are their KB role grants **intersected** with the API key's scopes. | [ADR-0010](adr/0010-credentials-and-database-enforced-isolation.md) |
+| D-20 | Admins issue only single-use, 24-hour, `KEY_ROTATE`-only **bootstrap keys**; integrations create, rotate and revoke their own keys within an admin-defined **scope ceiling** | [ADR-0012](adr/0012-api-key-lifecycle-and-restrictions.md) |
+| D-21 | API key expiry is mandatory: default 90 days, maximum 365; overlapping keys during rotation; expiry warning header in the last 14 days | [ADR-0012](adr/0012-api-key-lifecycle-and-restrictions.md) |
+| D-22 | Optional **KB-restricted API keys**, enforced server-side for services and relayed users | [ADR-0012](adr/0012-api-key-lifecycle-and-restrictions.md) |
+| D-23 | Local document storage behind a `DocumentStorage` interface (`LocalDocumentStorage`, root `D:\mimorag-data`); S3-compatible later without pipeline changes | M2 plan |
+| D-24 | Fully local AI stack during development (PaddleOCR, bge-m3, Qwen3-4B via Ollama on Windows, optional bge-reranker-v2-m3); no hosted inference APIs | [local-environment.md](local-environment.md) |
+| D-25 | WSL2 memory cap 6 GB (temporary development setting) | [local-environment.md](local-environment.md) |
 
 ### 0.3 Git workflow
 
@@ -60,10 +67,10 @@ Detailed acceptance results: [`PROJECT_PROGRESS.md`](../PROJECT_PROGRESS.md).
 |---|---|---|
 | Q-01 | Can each connected system (HRIS, CRM, ERP) issue RS256/ES256 user assertions and publish a JWKS endpoint? Which issuer and audience values will they use? (The verifier is ready since M1.) | Before user-scoped production use |
 | Q-02 | Long-term admin identity: OIDC through Keycloak or the company identity provider? | Before production |
-| Q-03 | Confirm PostgreSQL-backed jobs and outbox (ADR-0007) versus a broker | Start of M2 |
+| ~~Q-03~~ | ✅ Decided: PostgreSQL job queue, no broker, no outbox table (D-10) | — |
 | Q-04 | Docker storage location and disk budget for PaddleOCR image, models and page-image cache | Start of M2 |
 | Q-05 | Is time-boxed, audited platform support access to tenant content ever needed? | Before production |
-| Q-06 | Should every integration API key require an expiry (currently optional, maximum 730 days), with rotation reminders? | Before production |
+| ~~Q-06~~ | ✅ Decided: mandatory expiry, 90-day default, 365-day maximum (D-21) | — |
 
 ---
 
@@ -342,7 +349,8 @@ Tasks:
 
 Implemented endpoints (tenant-implicit integration plane, decision D-18; `/admin` = platform admin plane):
 - `POST /api/v1/admin/integrations`, `GET /api/v1/admin/integrations`, `GET …/{integrationId}`, `PATCH …/{integrationId}/status`
-- `POST /api/v1/admin/integrations/{integrationId}/api-keys`, `GET …/api-keys`, `DELETE …/api-keys/{keyId}`
+- `POST /api/v1/admin/integrations/{integrationId}/bootstrap-keys` (hardening: replaces admin content-key issuance), `PUT …/allowed-scopes`, `GET …/api-keys`, `DELETE …/api-keys/{keyId}`
+- `POST/GET /api/v1/integration/api-keys`, `DELETE /api/v1/integration/api-keys/{keyId}` (self-service keys, hardening)
 - `PUT /api/v1/admin/integrations/{integrationId}/trust-config`, `GET …/trust-config`
 - `GET /api/v1/integration` (the caller's own integration)
 - `POST /api/v1/knowledge-bases`, `GET /api/v1/knowledge-bases`

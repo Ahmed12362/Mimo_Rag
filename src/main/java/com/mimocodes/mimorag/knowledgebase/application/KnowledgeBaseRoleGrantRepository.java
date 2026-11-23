@@ -15,6 +15,9 @@ public interface KnowledgeBaseRoleGrantRepository extends Repository<KnowledgeBa
 
 	KnowledgeBaseRoleGrant save(KnowledgeBaseRoleGrant grant);
 
+	/** Flushes immediately so a concurrent replacement surfaces as a constraint violation inside the service. */
+	<S extends KnowledgeBaseRoleGrant> List<S> saveAllAndFlush(Iterable<S> grants);
+
 	List<KnowledgeBaseRoleGrant> findAllByIntegrationIdAndKnowledgeBaseIdOrderByRoleAscPermissionAsc(
 			UUID integrationId, UUID knowledgeBaseId);
 

@@ -15,7 +15,10 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * requirement itself is covered by unit tests.
  */
 @SpringBootTest(properties = { "mimorag.security.admin-key-sha256=" + TestCredentials.ADMIN_KEY_SHA256,
-		"mimorag.security.trust.allow-insecure-jwks=true", "mimorag.security.trust.allow-inline-jwks=false" })
+		"mimorag.security.trust.allow-insecure-jwks=true", "mimorag.security.trust.allow-inline-jwks=false",
+		// Short key-cache timings so JWKS rotation tests run in seconds.
+		"mimorag.security.assertion.jwks-cache-ttl=PT2S",
+		"mimorag.security.assertion.jwks-refresh-min-interval=PT1S" })
 @AutoConfigureMockMvc
 public abstract class PostgresIntegrationTest {
 

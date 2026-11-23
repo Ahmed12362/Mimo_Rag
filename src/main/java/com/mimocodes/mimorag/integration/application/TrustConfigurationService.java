@@ -1,8 +1,10 @@
 package com.mimocodes.mimorag.integration.application;
 
+import java.math.BigInteger;
 import java.net.URI;
 import java.time.Clock;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -39,6 +41,8 @@ public class TrustConfigurationService {
 	private static final Set<String> PRIVATE_KEY_MEMBERS = Set.of("d", "p", "q", "dp", "dq", "qi", "oth", "k");
 
 	private static final int MAX_INLINE_JWKS_LENGTH = 20_000;
+
+	private static final int MIN_RSA_KEY_BITS = 2048;
 
 	private static final String RESOURCE = "trust-configuration";
 
@@ -172,10 +176,23 @@ public class TrustConfigurationService {
 				if (PRIVATE_KEY_MEMBERS.stream().anyMatch(key::has)) {
 					violations.add(new ValidationViolation("inlineJwks", "must contain public keys only"));
 				}
+				if ("RSA".equals(kty) && rsaModulusBits(key.path("n").asString("")) < MIN_RSA_KEY_BITS) {
+					violations.add(new ValidationViolation("inlineJwks",
+							"RSA keys must be at least " + MIN_RSA_KEY_BITS + " bits"));
+				}
 			}
 		}
 		catch (RuntimeException ex) {
 			violations.add(new ValidationViolation("inlineJwks", "must be valid JWK Set JSON"));
+		}
+	}
+
+	private static int rsaModulusBits(String base64UrlModulus) {
+		try {
+			return new BigInteger(1, Base64.getUrlDecoder().decode(base64UrlModulus)).bitLength();
+		}
+		catch (IllegalArgumentException ex) {
+			return 0;
 		}
 	}
 

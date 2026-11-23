@@ -1,6 +1,9 @@
 package com.mimocodes.mimorag.access.web;
 
 import java.io.IOException;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 
 import jakarta.servlet.FilterChain;
@@ -32,12 +35,23 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * </ol>
  * Any failure leaves the request unauthenticated, which produces the same generic 401 for every cause. Secrets and
  * tokens are never logged; only reason codes and the public key id.
+ * <p>
+ * A bootstrap key authenticates <em>only</em> for creating the integration's first own key
+ * ({@code POST /api/v1/integration/api-keys}) and never together with a user assertion, so it can never reach tenant
+ * content. Keys close to expiry get an {@code X-Api-Key-Expires-At} response header.
  */
 final class IntegrationAuthenticationFilter extends OncePerRequestFilter {
 
 	static final String API_KEY_HEADER = "X-Api-Key";
 
 	static final String USER_ASSERTION_HEADER = "X-User-Assertion";
+
+	static final String EXPIRY_WARNING_HEADER = "X-Api-Key-Expires-At";
+
+	static final Duration EXPIRY_WARNING_WINDOW = Duration.ofDays(14);
+
+	/** The only endpoint a bootstrap key may call (owned by the integration module's key controller). */
+	static final String BOOTSTRAP_ENDPOINT = "/api/v1/integration/api-keys";
 
 	private static final Logger log = LoggerFactory.getLogger(IntegrationAuthenticationFilter.class);
 
@@ -49,12 +63,24 @@ final class IntegrationAuthenticationFilter extends OncePerRequestFilter {
 
 	private final ProblemDetailSecurityErrorHandler errorHandler;
 
+	private final Clock clock;
+
 	IntegrationAuthenticationFilter(ApiKeyAuthenticator apiKeyAuthenticator, UserAssertionVerifier userAssertionVerifier,
-			AuditRecorder audit, ProblemDetailSecurityErrorHandler errorHandler) {
+			AuditRecorder audit, ProblemDetailSecurityErrorHandler errorHandler, Clock clock) {
 		this.apiKeyAuthenticator = apiKeyAuthenticator;
 		this.userAssertionVerifier = userAssertionVerifier;
 		this.audit = audit;
 		this.errorHandler = errorHandler;
+		this.clock = clock;
+	}
+
+	/** Outcome of authentication: a context, an unauthenticated request, or an upstream outage. */
+	private record Outcome(AccessContext context, boolean serviceUnavailable) {
+
+		static final Outcome UNAUTHENTICATED = new Outcome(null, false);
+
+		static final Outcome UNAVAILABLE = new Outcome(null, true);
+
 	}
 
 	@Override
@@ -65,44 +91,68 @@ final class IntegrationAuthenticationFilter extends OncePerRequestFilter {
 			chain.doFilter(request, response);
 			return;
 		}
-		AccessContext context;
+		Outcome outcome;
 		try {
-			context = authenticate(apiKey, request.getHeader(USER_ASSERTION_HEADER));
+			outcome = authenticate(apiKey, request);
 		}
 		catch (DataAccessException ex) {
 			log.error("Credential verification unavailable", ex);
+			outcome = Outcome.UNAVAILABLE;
+		}
+		if (outcome.serviceUnavailable()) {
 			errorHandler.writeServiceUnavailable(response);
 			return;
 		}
-		if (context == null) {
+		if (outcome.context() == null) {
 			chain.doFilter(request, response);
 			return;
 		}
-		AccessContextBinding.proceedAs(context, request, response, chain);
+		addExpiryWarning(outcome.context(), response);
+		AccessContextBinding.proceedAs(outcome.context(), request, response, chain);
 	}
 
-	/** @return the verified context, or {@code null} if authentication failed */
-	private AccessContext authenticate(String apiKey, String userAssertion) {
+	private Outcome authenticate(String apiKey, HttpServletRequest request) {
 		ApiKeyAuthenticator.Result result = apiKeyAuthenticator.authenticate(apiKey);
 		if (result instanceof Rejected rejected) {
 			log.warn("API key authentication failed (reason={}, keyId={})", rejected.reason(), rejected.keyId());
-			return null;
+			return Outcome.UNAUTHENTICATED;
 		}
 		Authenticated authenticated = (Authenticated) result;
+		String userAssertion = request.getHeader(USER_ASSERTION_HEADER);
+		if (authenticated.bootstrap() && (userAssertion != null || !isBootstrapEndpoint(request))) {
+			log.warn("Bootstrap key used outside key creation (keyId={})", authenticated.keyId());
+			audit.recordUnauthenticated(new AuditEvent("AUTHENTICATION_FAILED", "api-key", authenticated.keyId(),
+					AuditOutcome.DENIED, Map.of("reason", "BOOTSTRAP_KEY_SCOPE")));
+			return Outcome.UNAUTHENTICATED;
+		}
 		AccessContext service = AccessContext.integrationService(authenticated.integrationId(),
-				authenticated.keyId(), authenticated.scopes(), CorrelationId.current().orElse(null));
+				new AccessContext.Credential(authenticated.keyId(), authenticated.bootstrap(),
+						authenticated.knowledgeBaseRestriction(), authenticated.expiresAt()),
+				authenticated.scopes(), CorrelationId.current().orElse(null));
 		if (userAssertion == null) {
-			return service;
+			return new Outcome(service, false);
 		}
 		try {
-			return userAssertionVerifier.verify(userAssertion, service);
+			return new Outcome(userAssertionVerifier.verify(userAssertion, service), false);
 		}
 		catch (InvalidUserAssertionException ex) {
 			log.warn("User assertion rejected (reason={}, keyId={}, detail={})", ex.getReason(), authenticated.keyId(),
 					ex.getMessage());
 			audit.recordUnauthenticated(new AuditEvent("USER_ASSERTION_REJECTED", "api-key", authenticated.keyId(),
 					AuditOutcome.DENIED, Map.of("reason", ex.getReason().name())));
-			return null;
+			return ex.getReason() == InvalidUserAssertionException.Reason.KEY_SOURCE_UNAVAILABLE ? Outcome.UNAVAILABLE
+					: Outcome.UNAUTHENTICATED;
+		}
+	}
+
+	private static boolean isBootstrapEndpoint(HttpServletRequest request) {
+		return "POST".equals(request.getMethod()) && BOOTSTRAP_ENDPOINT.equals(request.getRequestURI());
+	}
+
+	private void addExpiryWarning(AccessContext context, HttpServletResponse response) {
+		Instant expiresAt = context.credential().expiresAt();
+		if (expiresAt != null && expiresAt.isBefore(clock.instant().plus(EXPIRY_WARNING_WINDOW))) {
+			response.setHeader(EXPIRY_WARNING_HEADER, expiresAt.toString());
 		}
 	}
 

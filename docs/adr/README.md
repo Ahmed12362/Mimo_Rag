@@ -10,9 +10,11 @@ Each ADR records one decision: its context, the decision, and its consequences. 
 | [0004](0004-tenant-isolation-and-row-level-security.md) | Tenant isolation with Row-Level Security | Accepted |
 | [0005](0005-identity-and-access-model.md) | Identity and access model | Accepted |
 | [0006](0006-tenant-owned-document-review.md) | Tenant-owned document review with immutable snapshots | Accepted |
-| [0007](0007-async-jobs-and-transactional-outbox.md) | Async jobs and transactional outbox in PostgreSQL | Proposed (confirm in M2) |
+| [0007](0007-async-jobs-and-transactional-outbox.md) | Async jobs and transactional outbox in PostgreSQL | Superseded by 0011 |
 | [0008](0008-api-error-format-correlation-and-logging.md) | API error format, correlation IDs and logging | Accepted |
 | [0009](0009-jpa-annotations-in-domain.md) | JPA annotations allowed in domain classes | Accepted (amends 0001) |
-| [0010](0010-credentials-and-database-enforced-isolation.md) | Credential formats and database-enforced isolation | Accepted |
+| [0010](0010-credentials-and-database-enforced-isolation.md) | Credential formats and database-enforced isolation | Accepted (issuance amended by 0012) |
+| [0011](0011-postgresql-job-queue-without-outbox.md) | PostgreSQL job queue without an outbox table | Accepted (implemented in M2) |
+| [0012](0012-api-key-lifecycle-and-restrictions.md) | API key lifecycle: bootstrap hand-over, self-service rotation, scope ceiling, KB restrictions | Accepted |
 
 Template: `# ADR-NNNN: Title` → **Status**, **Date**, **Context**, **Decision**, **Consequences**.

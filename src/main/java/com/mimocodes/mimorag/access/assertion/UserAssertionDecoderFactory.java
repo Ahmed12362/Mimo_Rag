@@ -2,6 +2,9 @@ package com.mimocodes.mimorag.access.assertion;
 
 import java.io.IOException;
 import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URL;
 import java.text.ParseException;
 import java.time.Clock;
 import java.time.Duration;
@@ -11,10 +14,15 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import com.mimocodes.mimorag.integration.application.TrustConfigurationView;
+import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
+import com.nimbusds.jose.jwk.source.JWKSource;
+import com.nimbusds.jose.jwk.source.JWKSourceBuilder;
+import com.nimbusds.jose.proc.SecurityContext;
+import com.nimbusds.jose.util.DefaultResourceRetriever;
 
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.core.OAuth2TokenValidator;
@@ -27,31 +35,28 @@ import org.springframework.security.oauth2.jwt.JwtIssuedAtValidator;
 import org.springframework.security.oauth2.jwt.JwtIssuerValidator;
 import org.springframework.security.oauth2.jwt.JwtTimestampValidator;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
-import org.springframework.web.client.RestOperations;
-import org.springframework.web.client.RestTemplate;
 
 /**
  * Builds strict JWT decoders from an integration's trust configuration:
  * <ul>
  * <li>signature algorithms restricted to the configured subset of RS256/ES256 ({@code none} and HS* never accepted);
- * <li>keys only from that integration's JWKS (HTTPS endpoint, or inline keys in development);</li>
+ * <li>keys only from that integration's JWKS (HTTPS endpoint, or inline keys in development); RSA keys below the
+ * configured minimum size are ignored;</li>
+ * <li>remote keys are cached for a bounded time; an unknown {@code kid} triggers at most one re-fetch per
+ * configured interval; fetches have timeouts and a size limit and never follow redirects;</li>
  * <li>{@code iss} and {@code aud} must match exactly; {@code exp}, {@code iat} and the user-id claim are mandatory;
  * {@code nbf} honoured; bounded clock skew; total token lifetime capped.</li>
  * </ul>
  */
 class UserAssertionDecoderFactory {
 
-	private static final Duration JWKS_CONNECT_TIMEOUT = Duration.ofSeconds(2);
-
-	private static final Duration JWKS_READ_TIMEOUT = Duration.ofSeconds(3);
-
-	private final RestOperations jwksClient;
+	private final UserAssertionProperties properties;
 
 	private final Clock clock;
 
-	UserAssertionDecoderFactory(Clock clock) {
+	UserAssertionDecoderFactory(UserAssertionProperties properties, Clock clock) {
+		this.properties = properties;
 		this.clock = clock;
-		this.jwksClient = new RestTemplate(new NoRedirectRequestFactory());
 	}
 
 	JwtDecoder create(TrustConfigurationView configuration) throws InvalidUserAssertionException {
@@ -63,26 +68,45 @@ class UserAssertionDecoderFactory {
 			throw new InvalidUserAssertionException(InvalidUserAssertionException.Reason.INVALID_TRUST_CONFIGURATION,
 					"unsupported algorithm");
 		}
-		NimbusJwtDecoder decoder;
-		if (configuration.jwksUri() != null) {
-			decoder = NimbusJwtDecoder.withJwkSetUri(configuration.jwksUri())
-				.jwsAlgorithms(selected -> {
-					selected.clear();
-					selected.addAll(algorithms);
-				})
-				.restOperations(jwksClient)
-				.build();
-		}
-		else {
-			decoder = NimbusJwtDecoder.withJwkSource(new ImmutableJWKSet<>(parsePublicKeys(configuration.inlineJwks())))
-				.jwsAlgorithms(selected -> {
-					selected.clear();
-					selected.addAll(algorithms);
-				})
-				.build();
-		}
+		JWKSource<SecurityContext> keys = withMinimumKeyStrength(configuration.jwksUri() != null
+				? remoteKeys(configuration.jwksUri()) : new ImmutableJWKSet<>(parsePublicKeys(configuration.inlineJwks())));
+		NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSource(keys).jwsAlgorithms(selected -> {
+			selected.clear();
+			selected.addAll(algorithms);
+		}).build();
 		decoder.setJwtValidator(validator(configuration));
 		return decoder;
+	}
+
+	private JWKSource<SecurityContext> remoteKeys(String jwksUri) throws InvalidUserAssertionException {
+		URL url;
+		try {
+			url = URI.create(jwksUri).toURL();
+		}
+		catch (IllegalArgumentException | MalformedURLException ex) {
+			throw new InvalidUserAssertionException(InvalidUserAssertionException.Reason.INVALID_TRUST_CONFIGURATION,
+					"invalid JWKS URI");
+		}
+		NoRedirectResourceRetriever retriever = new NoRedirectResourceRetriever(
+				(int) properties.jwksConnectTimeout().toMillis(), (int) properties.jwksReadTimeout().toMillis(),
+				properties.jwksMaxBytes());
+		long fetchTimeout = properties.jwksConnectTimeout().plus(properties.jwksReadTimeout()).toMillis();
+		return JWKSourceBuilder.<SecurityContext>create(url, retriever)
+			.cache(properties.jwksCacheTtl().toMillis(), fetchTimeout)
+			.rateLimited(properties.jwksRefreshMinInterval().toMillis())
+			.refreshAheadCache(false)
+			.retrying(false)
+			.outageTolerant(false)
+			.build();
+	}
+
+	/** Ignores RSA keys below the configured size, so tokens signed with weak keys never verify. */
+	private JWKSource<SecurityContext> withMinimumKeyStrength(JWKSource<SecurityContext> source) {
+		int minBits = properties.minRsaKeyBits();
+		return (selector, context) -> source.get(selector, context)
+			.stream()
+			.filter(key -> !(key instanceof RSAKey rsa) || rsa.size() >= minBits)
+			.toList();
 	}
 
 	private OAuth2TokenValidator<Jwt> validator(TrustConfigurationView configuration) {
@@ -120,7 +144,7 @@ class UserAssertionDecoderFactory {
 
 	private static JWKSet parsePublicKeys(String inlineJwks) throws InvalidUserAssertionException {
 		try {
-			return JWKSet.parse(inlineJwks).toPublicJWKSet();
+			return new JWKSet(JWKSet.parse(inlineJwks).toPublicJWKSet().getKeys().stream().map(JWK::toPublicJWK).toList());
 		}
 		catch (ParseException ex) {
 			throw new InvalidUserAssertionException(InvalidUserAssertionException.Reason.INVALID_TRUST_CONFIGURATION,
@@ -128,18 +152,18 @@ class UserAssertionDecoderFactory {
 		}
 	}
 
-	/** JWKS fetches use short timeouts and never follow redirects (limits SSRF and slow-loris style issues). */
-	private static final class NoRedirectRequestFactory extends SimpleClientHttpRequestFactory {
+	/** JWKS fetches never follow redirects (limits SSRF and unexpected key origins). */
+	private static final class NoRedirectResourceRetriever extends DefaultResourceRetriever {
 
-		NoRedirectRequestFactory() {
-			setConnectTimeout(JWKS_CONNECT_TIMEOUT);
-			setReadTimeout(JWKS_READ_TIMEOUT);
+		NoRedirectResourceRetriever(int connectTimeoutMillis, int readTimeoutMillis, int sizeLimitBytes) {
+			super(connectTimeoutMillis, readTimeoutMillis, sizeLimitBytes);
 		}
 
 		@Override
-		protected void prepareConnection(HttpURLConnection connection, String httpMethod) throws IOException {
-			super.prepareConnection(connection, httpMethod);
+		protected HttpURLConnection openHTTPConnection(URL url) throws IOException {
+			HttpURLConnection connection = super.openHTTPConnection(url);
 			connection.setInstanceFollowRedirects(false);
+			return connection;
 		}
 
 	}

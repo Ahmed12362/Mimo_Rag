@@ -74,7 +74,9 @@ public class KnowledgeBaseService {
 	@Transactional
 	public KnowledgeBaseView create(AccessContext access, CreateKnowledgeBaseCommand command) {
 		UUID integrationId = access.requireIntegrationId();
-		if (!access.isIntegrationService() || !access.hasScope(Permission.KB_MANAGE)) {
+		// Creating a KB is tenant-wide; a KB-restricted key must not be able to widen its own reach.
+		if (!access.isIntegrationService() || !access.hasScope(Permission.KB_MANAGE)
+				|| access.knowledgeBaseRestriction().isPresent()) {
 			audit.recordIndependently(AuditEvent.denied("KNOWLEDGE_BASE_CREATE", RESOURCE, null));
 			throw new OperationNotPermittedException(Permission.KB_MANAGE);
 		}
@@ -84,14 +86,14 @@ public class KnowledgeBaseService {
 		KnowledgeBase kb = KnowledgeBase.create(integrationId, command.code(), command.name(), command.description(),
 				command.policies(), access.principalRef(), clock.instant());
 		try {
-			knowledgeBases.save(kb);
+			knowledgeBases.saveAndFlush(kb);
 		}
 		catch (DataIntegrityViolationException ex) {
 			throw new ConflictException("A knowledge base with this code already exists.");
 		}
 		audit.record(AuditEvent.success("KNOWLEDGE_BASE_CREATED", RESOURCE, kb.getId())
 			.withDetails(Map.of("code", kb.getCode())));
-		return KnowledgeBaseView.of(kb, KnowledgeBaseAccessPolicy.effectivePermissions(access, Set.of()));
+		return KnowledgeBaseView.of(kb, KnowledgeBaseAccessPolicy.effectivePermissions(access, kb.getId(), Set.of()));
 	}
 
 	@Transactional(readOnly = true)
@@ -102,15 +104,20 @@ public class KnowledgeBaseService {
 			if (access.roles().isEmpty() || visibleWith.isEmpty()) {
 				return Page.empty(pageable);
 			}
-			return knowledgeBases.findVisibleToRoles(integrationId, access.roles(), visibleWith, pageable)
-				.map(kb -> KnowledgeBaseView.of(kb, permissionsOn(access, kb)));
+			Page<KnowledgeBase> visible = access.knowledgeBaseRestriction()
+				.map(ids -> knowledgeBases.findVisibleToRolesWithin(integrationId, ids, access.roles(), visibleWith,
+						pageable))
+				.orElseGet(() -> knowledgeBases.findVisibleToRoles(integrationId, access.roles(), visibleWith,
+						pageable));
+			return visible.map(kb -> KnowledgeBaseView.of(kb, permissionsOn(access, kb)));
 		}
-		Set<Permission> servicePermissions = KnowledgeBaseAccessPolicy.effectivePermissions(access, Set.of());
-		if (servicePermissions.isEmpty()) {
+		if (KnowledgeBaseAccessPolicy.visibilityPermissions(access).isEmpty()) {
 			return Page.empty(pageable);
 		}
-		return knowledgeBases.findAllByIntegrationId(integrationId, pageable)
-			.map(kb -> KnowledgeBaseView.of(kb, servicePermissions));
+		Page<KnowledgeBase> page = access.knowledgeBaseRestriction()
+			.map(ids -> knowledgeBases.findAllByIntegrationIdAndIdIn(integrationId, ids, pageable))
+			.orElseGet(() -> knowledgeBases.findAllByIntegrationId(integrationId, pageable));
+		return page.map(kb -> KnowledgeBaseView.of(kb, permissionsOn(access, kb)));
 	}
 
 	@Transactional(readOnly = true)
@@ -174,7 +181,14 @@ public class KnowledgeBaseService {
 		Set<RoleGrant> normalized = validateGrants(requested);
 		Instant now = clock.instant();
 		grants.deleteAllForKnowledgeBase(kb.getIntegrationId(), kb.getId());
-		normalized.forEach(grant -> grants.save(new KnowledgeBaseRoleGrant(kb, grant.role(), grant.permission(), now)));
+		try {
+			grants.saveAllAndFlush(normalized.stream()
+				.map(grant -> new KnowledgeBaseRoleGrant(kb, grant.role(), grant.permission(), now))
+				.toList());
+		}
+		catch (DataIntegrityViolationException ex) {
+			throw new ConflictException("The role grants were modified concurrently. Retry the request.");
+		}
 		audit.record(AuditEvent.success("KNOWLEDGE_BASE_GRANTS_REPLACED", RESOURCE, kb.getId())
 			.withDetails(Map.of("grantCount", normalized.size())));
 		return List.copyOf(normalized);
@@ -202,9 +216,9 @@ public class KnowledgeBaseService {
 
 	private Set<Permission> permissionsOn(AccessContext access, KnowledgeBase kb) {
 		if (!access.isEndUser()) {
-			return KnowledgeBaseAccessPolicy.effectivePermissions(access, Set.of());
+			return KnowledgeBaseAccessPolicy.effectivePermissions(access, kb.getId(), Set.of());
 		}
-		if (access.roles().isEmpty()) {
+		if (access.roles().isEmpty() || !access.credentialAllowsKnowledgeBase(kb.getId())) {
 			return Set.of();
 		}
 		List<Permission> granted = grants
@@ -212,7 +226,7 @@ public class KnowledgeBaseService {
 			.stream()
 			.map(KnowledgeBaseRoleGrant::getPermission)
 			.toList();
-		return KnowledgeBaseAccessPolicy.effectivePermissions(access, granted);
+		return KnowledgeBaseAccessPolicy.effectivePermissions(access, kb.getId(), granted);
 	}
 
 	private static Set<RoleGrant> validateGrants(List<RoleGrant> requested) {

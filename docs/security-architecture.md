@@ -52,7 +52,12 @@ MimoRag **does not** log users in, store passwords, manage sessions or issue use
 
 - **M1: API keys.** Format `mrk_<keyId>_<secret>`, where the secret is at least 256 bits of CSPRNG output.
 - **Storage:** `keyId`, a SHA-256 hash of the secret, `last4`, status, creation and expiry time, and last use. The secret is shown once, at issuance. Comparison is constant-time.
-- **Lifecycle:** keys are issued and rotated (several active at once for zero-downtime rotation) and revoked by platform admins.
+- **Lifecycle (M1 hardening, [ADR-0012](adr/0012-api-key-lifecycle-and-restrictions.md)):**
+  - admins issue only **bootstrap keys** (scope `KEY_ROTATE` only, at most 24 hours, single use), which authenticate solely for creating the integration's first own key;
+  - integrations create, rotate and revoke **their own** keys within an admin-defined **scope ceiling**;
+  - expiry is mandatory (default 90 days, maximum 365), several keys can be active at once, and responses warn in the last 14 days;
+  - keys can be restricted to specific Knowledge Bases;
+  - admins can revoke any key, but can never hold a working content key.
 - **Later:** OAuth2 client credentials and mTLS as additional `IntegrationAuthenticator` implementations. Core code does not change.
 
 ### 2.4 Signed user assertions
@@ -218,4 +223,19 @@ These events are audited, as append-only records with integration, principal, ac
 | Append-only audit trail (UPDATE/DELETE revoked) for admin actions, KB changes, denials, auth failures | `V4__audit_events.sql`, `JdbcAuditRecorder` | `AdminIntegrationApiIntegrationTest`, `RowLevelSecurityIntegrationTest` |
 | Optimistic locking on KB updates | `KnowledgeBase` `@Version` | `KnowledgeBaseApiIntegrationTest` |
 
-**Not yet implemented (planned):** rate limiting and quotas (M2+), `jti` replay cache for write operations, admin OIDC login, audit read API.
+### Implemented in the M1 hardening pass
+
+| Control | Where | Verified by |
+|---|---|---|
+| Admins cannot create content keys; bootstrap keys are rotation-only, 24 h, single use (concurrent use: exactly one succeeds) | `ApiKeyService`, `SelfServiceKeyService`, `IntegrationAuthenticationFilter`, V5 CHECKs and RLS policies | `BootstrapKeyRotationIntegrationTest`, `RowLevelSecurityIntegrationTest` |
+| Scope ceiling per integration, applied at every authentication | `ApiKeyAuthenticator`, `Integration.grantableScopes` | `ApiKeyAuthenticatorTest`, `BootstrapKeyRotationIntegrationTest` |
+| Mandatory key expiry (≤ 365 days) enforced in code and database; expiry warning header | `ApiKey`, V5 | `BootstrapKeyRotationIntegrationTest`, `RowLevelSecurityIntegrationTest` |
+| KB-restricted keys for services and relayed users; no escalation through rotation | `KnowledgeBaseAccessPolicy`, `SelfServiceKeyService`, `integration_api_key_kb` | `KnowledgeBaseRestrictedKeyIntegrationTest`, `KnowledgeBaseAccessPolicyTest` |
+| Context cannot switch inside a transaction; failed tenant setup releases all resources | `AccessContextHolder`, `TenantAwareJpaTransactionManager` | `TenantAwareJpaTransactionManagerIntegrationTest` |
+| Only `access`, `shared.persistence` and the job runner may bind an access context | ArchUnit | `ArchitectureRulesTest` |
+| Every table classified; tenant tables FORCE RLS; every RLS table has policies | Database guard | `RlsCoverageIntegrationTest` |
+| Audit rows name the authenticating (or relaying) API key | `JdbcAuditRecorder`, `audit_event.api_key_id` | `UserAssertionIntegrationTest`, `BootstrapKeyRotationIntegrationTest` |
+| JWKS: bounded cache (5 min), at most one re-fetch per 30 s for unknown key ids, size limit, no redirects, RSA ≥ 2048 bits, outage → 503 | `UserAssertionDecoderFactory`, `UserAssertionProperties` | `JwksRotationIntegrationTest`, `TrustConfigurationValidationTest` |
+| Concurrent duplicate creates return 409, not 500 | `saveAndFlush` in services | `KnowledgeBaseApiIntegrationTest` |
+
+**Not yet implemented (planned):** rate limiting and quotas (M2), `jti` replay cache for write operations (M2, with uploads), admin OIDC login (Q-02), audit read API.

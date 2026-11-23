@@ -95,7 +95,8 @@ class IntegrationAuthenticationIntegrationTest extends PostgresIntegrationTest {
 	@Test
 	void expiredKeyIsRejected() throws Exception {
 		db.as(AccessContext.platformAdmin("t"), jdbc -> jdbc.update(
-				"update integration_api_key set expires_at = now() - interval '1 minute' where key_id = ?",
+				"update integration_api_key set created_at = now() - interval '2 days', "
+						+ "expires_at = now() - interval '1 minute' where key_id = ?",
 				key.keyId()));
 
 		mockMvc.perform(api.withKey(get("/api/v1/integration"), key.plaintext())).andExpect(status().isUnauthorized());

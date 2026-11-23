@@ -88,6 +88,7 @@ infrastructure (JPA repositories, HTTP clients, provider adapters) ──impleme
 8. `access` uses the `integration` module only through `integration.application`.
 9. JOSE/JWT libraries (`com.nimbusds`, `spring-security-oauth2`) are used only inside `access`.
 10. No field injection; no `java.util.logging`.
+11. Only `access`, `shared.access`, `shared.persistence` and the job runner (`jobs`) may bind an access context (`AccessContextHolder.set/callAs/clear`). Binding decides which tenant the database sees.
 
 Rules that target modules not yet implemented use `allowEmptyShould(true)`, so they start protecting each module the moment its first class appears.
 

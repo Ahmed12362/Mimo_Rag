@@ -6,6 +6,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.sun.net.httpserver.HttpServer;
 
@@ -18,6 +19,8 @@ public final class JwksTestServer {
 
 	private final Map<String, String> documents = new ConcurrentHashMap<>();
 
+	private final Map<String, AtomicInteger> fetches = new ConcurrentHashMap<>();
+
 	private JwksTestServer() {
 		try {
 			server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -26,7 +29,9 @@ public final class JwksTestServer {
 			throw new IllegalStateException(ex);
 		}
 		server.createContext("/", exchange -> {
-			String body = documents.get(exchange.getRequestURI().getPath());
+			String path = exchange.getRequestURI().getPath();
+			fetches.computeIfAbsent(path, key -> new AtomicInteger()).incrementAndGet();
+			String body = documents.get(path);
 			byte[] bytes = (body == null ? "" : body).getBytes(StandardCharsets.UTF_8);
 			exchange.getResponseHeaders().add("Content-Type", "application/json");
 			exchange.sendResponseHeaders(body == null ? 404 : 200, body == null ? -1 : bytes.length);
@@ -49,6 +54,17 @@ public final class JwksTestServer {
 		String path = "/jwks/" + name;
 		documents.put(path, jwkSetJson);
 		return "http://127.0.0.1:" + server.getAddress().getPort() + path;
+	}
+
+	/** Simulates an outage of the endpoint (HTTP 404 from now on). */
+	public void unpublish(String name) {
+		documents.remove("/jwks/" + name);
+	}
+
+	/** Number of times the endpoint was fetched so far. */
+	public int fetchCount(String name) {
+		AtomicInteger count = fetches.get("/jwks/" + name);
+		return count == null ? 0 : count.get();
 	}
 
 }

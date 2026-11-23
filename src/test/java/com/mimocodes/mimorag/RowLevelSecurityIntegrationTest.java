@@ -97,18 +97,46 @@ class RowLevelSecurityIntegrationTest extends PostgresIntegrationTest {
 	}
 
 	@Test
-	void tenantCannotModifyPlatformManagedTables() {
-		// The own integration row is visible, but the WITH CHECK policy forbids integration-plane writes.
+	void tenantCannotModifyPlatformManagedRows() {
+		// The own integration row is visible, but only the admin plane may change it (status, scope ceiling).
 		assertThatThrownBy(() -> db.as(service(tenantA),
-				jdbc -> jdbc.update("update integration set status = 'ACTIVE' where id = ?", tenantA)))
-			.rootCause()
-			.hasMessageContaining("row-level security");
-		assertThatThrownBy(() -> db.as(service(tenantA),
-				jdbc -> jdbc.update("update integration_api_key set status = 'ACTIVE' where integration_id = ?",
-						tenantA)))
+				jdbc -> jdbc.update("update integration set allowed_scopes = '{KB_MANAGE}' where id = ?", tenantA)))
 			.rootCause()
 			.hasMessageContaining("row-level security");
 	}
+
+	@Test
+	void tenantManagesOnlyItsOwnKeysAndCannotCreateBootstrapKeys() {
+		Integer foreignUpdated = db.as(service(tenantA), jdbc -> jdbc
+			.update("update integration_api_key set status = 'REVOKED' where integration_id = ?", tenantB));
+		assertThat(foreignUpdated).isZero();
+		assertThatThrownBy(() -> db.as(service(tenantA), jdbc -> jdbc.update(INSERT_KEY_SQL, tenantA,
+				"0123456789abcdef01234567", "BOOTSTRAP", "{KEY_ROTATE}")))
+			.rootCause()
+			.hasMessageContaining("row-level security");
+	}
+
+	@Test
+	void keyLifecycleInvariantsAreEnforcedByTheDatabase() {
+		AccessContext admin = AccessContext.platformAdmin("t");
+
+		assertThatThrownBy(() -> db.as(admin, jdbc -> jdbc.update(
+				"update integration_api_key set expires_at = created_at + interval '400 days' "
+						+ "where integration_id = ? and key_type = 'STANDARD'",
+				tenantA)))
+			.rootCause()
+			.hasMessageContaining("integration_api_key_expiry_bounds");
+		assertThatThrownBy(() -> db.as(admin, jdbc -> jdbc.update(INSERT_KEY_SQL, tenantA,
+				"0123456789abcdef01234568", "BOOTSTRAP", "{KB_MANAGE}")))
+			.rootCause()
+			.hasMessageContaining("integration_api_key_bootstrap_rules");
+	}
+
+	private static final String INSERT_KEY_SQL = """
+			insert into integration_api_key (id, integration_id, key_id, secret_hash, last4, name, key_type, scopes,
+			                                 status, expires_at, created_at, created_by, version)
+			values (gen_random_uuid(), ?, ?, repeat('a', 64), 'abcd', 'x', ?, ?::text[], 'ACTIVE',
+			        now() + interval '1 hour', now(), 'test', 0)""";
 
 	@Test
 	void platformAdminSeesAllIntegrationsButNoTenantContent() {

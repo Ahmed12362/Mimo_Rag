@@ -1,6 +1,5 @@
 package com.mimocodes.mimorag.integration.api.admin;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 
@@ -24,16 +23,22 @@ final class AdminIntegrationRequests {
 	private AdminIntegrationRequests() {
 	}
 
+	/**
+	 * @param allowedScopes scope ceiling for the integration's own keys ({@code KEY_ROTATE} is implicit)
+	 */
 	record RegisterIntegrationRequest(
 			@NotBlank @Pattern(regexp = CODE_PATTERN, message = "must be 2-64 lowercase letters, digits or hyphens, starting with a letter") String code,
-			@NotBlank @Size(max = 200) String name, @Size(max = 2000) String description) {
+			@NotBlank @Size(max = 200) String name, @Size(max = 2000) String description,
+			@NotNull @Size(max = 10) Set<@NotNull Permission> allowedScopes) {
 	}
 
 	record ChangeStatusRequest(@NotNull IntegrationStatus status) {
 	}
 
-	record IssueApiKeyRequest(@NotBlank @Size(max = 100) String name,
-			@NotEmpty @Size(max = 10) Set<@NotNull Permission> scopes, Instant expiresAt) {
+	record AllowedScopesRequest(@NotNull @Size(max = 10) Set<@NotNull Permission> allowedScopes) {
+	}
+
+	record IssueBootstrapKeyRequest(@NotBlank @Size(max = 100) String name) {
 	}
 
 	record TrustConfigurationRequest(@NotBlank @Size(max = 500) String issuer, @NotBlank @Size(max = 500) String audience,

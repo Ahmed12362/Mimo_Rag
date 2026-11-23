@@ -30,6 +30,23 @@ public interface KnowledgeBaseRepository extends Repository<KnowledgeBase, UUID>
 
 	Page<KnowledgeBase> findAllByIntegrationId(UUID integrationId, Pageable pageable);
 
+	/** Listing for a KB-restricted API key. */
+	Page<KnowledgeBase> findAllByIntegrationIdAndIdIn(UUID integrationId, Collection<UUID> ids, Pageable pageable);
+
+	@Query(value = """
+			select kb from KnowledgeBase kb
+			where kb.integrationId = :integrationId and kb.id in :ids
+			  and exists (select g.id from KnowledgeBaseRoleGrant g
+			              where g.knowledgeBaseId = kb.id and g.role in :roles and g.permission in :permissions)""",
+			countQuery = """
+					select count(kb) from KnowledgeBase kb
+					where kb.integrationId = :integrationId and kb.id in :ids
+					  and exists (select g.id from KnowledgeBaseRoleGrant g
+					              where g.knowledgeBaseId = kb.id and g.role in :roles and g.permission in :permissions)""")
+	Page<KnowledgeBase> findVisibleToRolesWithin(@Param("integrationId") UUID integrationId,
+			@Param("ids") Collection<UUID> ids, @Param("roles") Collection<String> roles,
+			@Param("permissions") Collection<Permission> permissions, Pageable pageable);
+
 	@Query(value = """
 			select kb from KnowledgeBase kb
 			where kb.integrationId = :integrationId

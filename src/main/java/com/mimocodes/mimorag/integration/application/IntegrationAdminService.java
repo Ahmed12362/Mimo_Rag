@@ -1,15 +1,19 @@
 package com.mimocodes.mimorag.integration.application;
 
 import java.time.Clock;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import com.mimocodes.mimorag.integration.domain.Integration;
 import com.mimocodes.mimorag.integration.domain.IntegrationStatus;
 import com.mimocodes.mimorag.shared.access.AccessContext;
+import com.mimocodes.mimorag.shared.access.Permission;
 import com.mimocodes.mimorag.shared.audit.AuditEvent;
 import com.mimocodes.mimorag.shared.audit.AuditRecorder;
 import com.mimocodes.mimorag.shared.error.ConflictException;
+import com.mimocodes.mimorag.shared.error.InvalidRequestException;
 import com.mimocodes.mimorag.shared.error.ResourceNotFoundException;
 
 import org.springframework.dao.DataIntegrityViolationException;
@@ -18,7 +22,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Integration lifecycle. Registration and status changes are platform-admin operations. */
+/** Integration lifecycle. Registration, status and scope-ceiling changes are platform-admin operations. */
 @Service
 public class IntegrationAdminService {
 
@@ -36,25 +40,27 @@ public class IntegrationAdminService {
 		this.clock = clock;
 	}
 
-	public record RegisterIntegrationCommand(String code, String name, String description) {
+	public record RegisterIntegrationCommand(String code, String name, String description,
+			Set<Permission> allowedScopes) {
 	}
 
 	@Transactional
 	public IntegrationView register(AccessContext access, RegisterIntegrationCommand command) {
 		access.requirePlatformAdmin();
+		validateCeiling(command.allowedScopes());
 		if (integrations.existsByCode(command.code())) {
 			throw new ConflictException("An integration with this code already exists.");
 		}
 		Integration integration = Integration.register(command.code(), command.name(), command.description(),
-				clock.instant());
+				command.allowedScopes(), clock.instant());
 		try {
-			integrations.save(integration);
+			integrations.saveAndFlush(integration);
 		}
 		catch (DataIntegrityViolationException ex) {
 			throw new ConflictException("An integration with this code already exists.");
 		}
 		audit.record(AuditEvent.success("INTEGRATION_REGISTERED", RESOURCE, integration.getId())
-			.withDetails(Map.of("code", integration.getCode())));
+			.withDetails(Map.of("code", integration.getCode(), "allowedScopes", names(command.allowedScopes()))));
 		return IntegrationView.of(integration);
 	}
 
@@ -82,6 +88,20 @@ public class IntegrationAdminService {
 		return IntegrationView.of(integration);
 	}
 
+	/** Changes the scope ceiling; takes effect immediately for every existing key of the integration. */
+	@Transactional
+	public IntegrationView changeAllowedScopes(AccessContext access, UUID integrationId,
+			Set<Permission> allowedScopes) {
+		access.requirePlatformAdmin();
+		validateCeiling(allowedScopes);
+		Integration integration = load(integrationId);
+		integration.changeAllowedScopes(allowedScopes, clock.instant());
+		integrations.saveAndFlush(integration);
+		audit.record(AuditEvent.success("INTEGRATION_ALLOWED_SCOPES_CHANGED", RESOURCE, integrationId)
+			.withDetails(Map.of("allowedScopes", names(allowedScopes))));
+		return IntegrationView.of(integration);
+	}
+
 	/** The calling integration's own record (integration plane). */
 	@Transactional(readOnly = true)
 	public IntegrationView getOwn(AccessContext access) {
@@ -90,6 +110,19 @@ public class IntegrationAdminService {
 
 	Integration load(UUID integrationId) {
 		return integrations.findById(integrationId).orElseThrow(() -> new ResourceNotFoundException(RESOURCE));
+	}
+
+	private static void validateCeiling(Set<Permission> allowedScopes) {
+		if (allowedScopes == null) {
+			throw new InvalidRequestException("allowedScopes", "must not be null");
+		}
+		if (allowedScopes.contains(Permission.KEY_ROTATE)) {
+			throw new InvalidRequestException("allowedScopes", "KEY_ROTATE is always allowed and must not be listed");
+		}
+	}
+
+	private static List<String> names(Set<Permission> permissions) {
+		return permissions.stream().map(Enum::name).sorted().toList();
 	}
 
 }

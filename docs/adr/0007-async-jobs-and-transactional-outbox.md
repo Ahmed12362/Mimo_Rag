@@ -1,6 +1,6 @@
 # ADR-0007: Async jobs and transactional outbox in PostgreSQL
 
-- **Status:** Proposed. To be confirmed or revised at the start of M2.
+- **Status:** Superseded by [ADR-0011](0011-postgresql-job-queue-without-outbox.md): the job queue is confirmed, the outbox table is dropped.
 - **Date:** 2026-11-23
 
 ## Context

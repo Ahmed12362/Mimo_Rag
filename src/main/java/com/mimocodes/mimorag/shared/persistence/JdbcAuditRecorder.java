@@ -21,9 +21,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 class JdbcAuditRecorder implements AuditRecorder {
 
 	private static final String INSERT_SQL = """
-			insert into audit_event (id, integration_id, principal_type, principal_ref, action, target_type,
-			                         target_id, outcome, correlation_id, occurred_at, details)
-			values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)""";
+			insert into audit_event (id, integration_id, principal_type, principal_ref, api_key_id, action,
+			                         target_type, target_id, outcome, correlation_id, occurred_at, details)
+			values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)""";
 
 	private final JdbcTemplate jdbc;
 
@@ -62,7 +62,10 @@ class JdbcAuditRecorder implements AuditRecorder {
 		UUID integrationId = context == null ? null : context.integrationId();
 		String principalType = context == null ? "ANONYMOUS" : context.principalType().name();
 		String principalRef = context == null ? null : context.principalRef();
-		jdbc.update(INSERT_SQL, UUID.randomUUID(), integrationId, principalType, principalRef, event.action(),
+		// For end users this is the key that relayed the request, so every user action stays attributable to a key.
+		String apiKeyId = context == null ? null : context.apiKeyId().orElse(null);
+		jdbc.update(INSERT_SQL, UUID.randomUUID(), integrationId, principalType, principalRef, apiKeyId,
+				event.action(),
 				event.targetType(), event.targetId(), event.outcome().name(),
 				CorrelationId.current().orElse(null), Timestamp.from(clock.instant()),
 				jsonMapper.writeValueAsString(event.details()));

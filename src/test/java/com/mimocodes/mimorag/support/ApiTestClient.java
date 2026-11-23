@@ -1,6 +1,7 @@
 package com.mimocodes.mimorag.support;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -47,16 +48,44 @@ public final class ApiTestClient {
 
 	// ---- admin plane ----------------------------------------------------------------------------------------
 
+	/** Scope ceiling used for test integrations: every grantable scope. */
+	public static final List<String> ALL_SCOPES = List.of("KB_READ", "KB_MANAGE", "DOCUMENT_UPLOAD",
+			"DOCUMENT_REVIEW", "DOCUMENT_SUBMIT", "TOOL_EXECUTE", "TOOL_CATALOG_MANAGE");
+
 	public UUID createIntegration(String code) throws Exception {
+		return createIntegration(code, ALL_SCOPES);
+	}
+
+	public UUID createIntegration(String code, List<String> allowedScopes) throws Exception {
 		JsonNode body = readJson(admin(post("/api/v1/admin/integrations"))
-			.content(toJson(Map.of("code", code, "name", "Integration " + code))), 201);
+			.content(toJson(Map.of("code", code, "name", "Integration " + code, "allowedScopes", allowedScopes))),
+				201);
 		return UUID.fromString(body.get("id").asString());
 	}
 
-	public IssuedKey issueKey(UUID integrationId, String... scopes) throws Exception {
-		JsonNode body = readJson(admin(post("/api/v1/admin/integrations/{id}/api-keys", integrationId))
-			.content(toJson(Map.of("name", "test key", "scopes", Arrays.asList(scopes)))), 201);
+	/** Admin hand-over: a bootstrap key (KEY_ROTATE only, 24h, single use). */
+	public IssuedKey issueBootstrapKey(UUID integrationId) throws Exception {
+		JsonNode body = readJson(admin(post("/api/v1/admin/integrations/{id}/bootstrap-keys", integrationId))
+			.content(toJson(Map.of("name", "bootstrap"))), 201);
 		return new IssuedKey(body.get("key").get("keyId").asString(), body.get("plaintextKey").asString());
+	}
+
+	/** The integration creates one of its own keys with a key holding KEY_ROTATE. */
+	public IssuedKey createKey(String callerKey, List<String> scopes, List<UUID> knowledgeBaseIds) throws Exception {
+		Map<String, Object> request = new HashMap<>();
+		request.put("name", "test key");
+		request.put("scopes", scopes);
+		if (knowledgeBaseIds != null) {
+			request.put("knowledgeBaseIds", knowledgeBaseIds);
+		}
+		JsonNode body = readJson(withKey(post("/api/v1/integration/api-keys"), callerKey).content(toJson(request)),
+				201);
+		return new IssuedKey(body.get("key").get("keyId").asString(), body.get("plaintextKey").asString());
+	}
+
+	/** Realistic flow: admin issues a bootstrap key, the integration exchanges it for a standard key. */
+	public IssuedKey issueKey(UUID integrationId, String... scopes) throws Exception {
+		return createKey(issueBootstrapKey(integrationId).plaintext(), Arrays.asList(scopes), null);
 	}
 
 	public void revokeKey(UUID integrationId, String keyId) throws Exception {

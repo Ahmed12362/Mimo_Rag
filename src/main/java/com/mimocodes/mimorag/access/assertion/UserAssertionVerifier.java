@@ -15,6 +15,8 @@ import com.mimocodes.mimorag.integration.application.TrustConfigurationView;
 import com.mimocodes.mimorag.shared.access.AccessContext;
 import com.mimocodes.mimorag.shared.access.AccessContextHolder;
 import com.mimocodes.mimorag.shared.access.AuthMethod;
+import com.nimbusds.jose.KeySourceException;
+import com.nimbusds.jose.jwk.source.RateLimitReachedException;
 
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
@@ -48,9 +50,10 @@ public class UserAssertionVerifier {
 	private record CachedDecoder(long configurationVersion, JwtDecoder decoder) {
 	}
 
-	UserAssertionVerifier(TrustConfigurationService trustConfigurations, Clock clock) {
+	UserAssertionVerifier(TrustConfigurationService trustConfigurations, UserAssertionProperties properties,
+			Clock clock) {
 		this.trustConfigurations = trustConfigurations;
-		this.decoderFactory = new UserAssertionDecoderFactory(clock);
+		this.decoderFactory = new UserAssertionDecoderFactory(properties, clock);
 	}
 
 	public AccessContext verify(String token, AccessContext integration) throws InvalidUserAssertionException {
@@ -66,7 +69,8 @@ public class UserAssertionVerifier {
 			jwt = decoderFor(configuration).decode(token);
 		}
 		catch (JwtException ex) {
-			throw new InvalidUserAssertionException(Reason.REJECTED_BY_VALIDATION, ex.getMessage());
+			Reason reason = keySourceUnavailable(ex) ? Reason.KEY_SOURCE_UNAVAILABLE : Reason.REJECTED_BY_VALIDATION;
+			throw new InvalidUserAssertionException(reason, ex.getMessage());
 		}
 		String userId = singleValue(jwt.getClaims().get(configuration.claimUserId()));
 		if (userId == null) {
@@ -77,6 +81,22 @@ public class UserAssertionVerifier {
 		AuthMethod method = configuration.jwksUri() != null ? AuthMethod.API_KEY_AND_JWT_JWKS
 				: AuthMethod.API_KEY_AND_JWT_INLINE_JWKS;
 		return integration.asEndUser(userId, roles, groups, method);
+	}
+
+	/**
+	 * True when the integration's key endpoint could not be reached. A refused re-fetch because of the rate limit
+	 * (unknown key id) is <em>not</em> an outage: it is an invalid token.
+	 */
+	private static boolean keySourceUnavailable(Throwable failure) {
+		for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+			if (cause instanceof RateLimitReachedException) {
+				return false;
+			}
+			if (cause instanceof KeySourceException) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private JwtDecoder decoderFor(TrustConfigurationView configuration) throws InvalidUserAssertionException {

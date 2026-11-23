@@ -1,8 +1,13 @@
 package com.mimocodes.mimorag.knowledgebase;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import com.mimocodes.mimorag.support.ApiTestClient;
 import com.mimocodes.mimorag.support.PostgresIntegrationTest;
@@ -99,6 +104,21 @@ class KnowledgeBaseApiIntegrationTest extends PostgresIntegrationTest {
 		mockMvc.perform(api.withKey(post("/api/v1/knowledge-bases"), managerKey)
 			.content(api.toJson(Map.of("code", "dup", "name", "again"))))
 			.andExpect(status().isConflict());
+	}
+
+	@Test
+	void concurrentCreatesWithTheSameCodeYieldOneCreatedAndConflicts() throws Exception {
+		Callable<Integer> create = () -> mockMvc.perform(api.withKey(post("/api/v1/knowledge-bases"), managerKey)
+			.content(api.toJson(Map.of("code", "raced", "name", "Raced")))).andReturn().getResponse().getStatus();
+
+		List<Integer> statuses = new ArrayList<>();
+		try (ExecutorService pool = Executors.newFixedThreadPool(4)) {
+			for (Future<Integer> result : pool.invokeAll(List.of(create, create, create, create))) {
+				statuses.add(result.get());
+			}
+		}
+
+		assertThat(statuses).containsOnlyOnce(201).allMatch(code -> code == 201 || code == 409);
 	}
 
 	@Test

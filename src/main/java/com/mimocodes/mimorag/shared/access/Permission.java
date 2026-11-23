@@ -15,7 +15,13 @@ public enum Permission {
 	DOCUMENT_REVIEW,
 	DOCUMENT_SUBMIT,
 	TOOL_EXECUTE,
-	TOOL_CATALOG_MANAGE;
+	TOOL_CATALOG_MANAGE,
+
+	/**
+	 * Manage the integration's own API keys (create, list, revoke). Never grants access to tenant content and can
+	 * only be held by the service identity; bootstrap keys carry exactly this scope.
+	 */
+	KEY_ROTATE;
 
 	/** Permissions that can be granted to integration roles on an individual Knowledge Base. */
 	public static final Set<Permission> KNOWLEDGE_BASE_PERMISSIONS = EnumSet.of(KB_READ, KB_MANAGE, DOCUMENT_UPLOAD,

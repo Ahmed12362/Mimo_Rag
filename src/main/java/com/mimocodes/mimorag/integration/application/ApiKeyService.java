@@ -1,32 +1,31 @@
 package com.mimocodes.mimorag.integration.application;
 
 import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 
 import com.mimocodes.mimorag.integration.domain.ApiKey;
 import com.mimocodes.mimorag.integration.domain.ApiKeyCredential;
+import com.mimocodes.mimorag.integration.domain.Integration;
 import com.mimocodes.mimorag.shared.access.AccessContext;
-import com.mimocodes.mimorag.shared.access.Permission;
 import com.mimocodes.mimorag.shared.audit.AuditEvent;
 import com.mimocodes.mimorag.shared.audit.AuditRecorder;
-import com.mimocodes.mimorag.shared.error.InvalidRequestException;
+import com.mimocodes.mimorag.shared.error.ConflictException;
 import com.mimocodes.mimorag.shared.error.ResourceNotFoundException;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Issuing, listing and revoking integration API keys (platform-admin operations). */
+/**
+ * Platform-admin key operations. Admins can hand an integration over with a <em>bootstrap</em> key (rotation only,
+ * 24 hours, single use), inspect key metadata, and revoke any key in an incident. They can never create a key that
+ * reaches tenant content (ADR-0012).
+ */
 @Service
 public class ApiKeyService {
 
-	static final Duration MAX_VALIDITY = Duration.ofDays(730);
-
-	private static final String RESOURCE = "api-key";
+	static final String RESOURCE = "api-key";
 
 	private final IntegrationAdminService integrationService;
 
@@ -44,22 +43,20 @@ public class ApiKeyService {
 		this.clock = clock;
 	}
 
-	public record IssueApiKeyCommand(String name, Set<Permission> scopes, Instant expiresAt) {
-	}
-
 	@Transactional
-	public IssuedApiKey issue(AccessContext access, UUID integrationId, IssueApiKeyCommand command) {
+	public IssuedApiKey issueBootstrap(AccessContext access, UUID integrationId, String name) {
 		access.requirePlatformAdmin();
-		integrationService.load(integrationId);
-		Instant now = clock.instant();
-		validate(command, now);
+		Integration integration = integrationService.load(integrationId);
+		if (!integration.isActive()) {
+			throw new ConflictException("Bootstrap keys can only be issued for active integrations.");
+		}
 		ApiKeyCredential.Generated credential = ApiKeyCredential.generate();
-		ApiKey apiKey = ApiKey.issue(integrationId, credential, command.name(), command.scopes(), command.expiresAt(),
-				now);
-		apiKeys.save(apiKey);
-		audit.record(AuditEvent.success("API_KEY_ISSUED", RESOURCE, apiKey.getKeyId())
-			.withDetails(Map.of("integrationId", integrationId.toString(), "scopes",
-					apiKey.getScopes().stream().map(Enum::name).sorted().toList())));
+		ApiKey apiKey = ApiKey.issueBootstrap(integrationId, credential, name, clock.instant(),
+				access.principalRef());
+		apiKeys.saveAndFlush(apiKey);
+		audit.record(AuditEvent.success("BOOTSTRAP_KEY_ISSUED", RESOURCE, apiKey.getKeyId())
+			.withDetails(Map.of("integrationId", integrationId.toString(), "expiresAt",
+					apiKey.getExpiresAt().toString())));
 		return new IssuedApiKey(ApiKeyView.of(apiKey), credential.plaintext());
 	}
 
@@ -73,30 +70,17 @@ public class ApiKeyService {
 			.toList();
 	}
 
+	/** Emergency revocation of any key of an integration (incident response). */
 	@Transactional
 	public ApiKeyView revoke(AccessContext access, UUID integrationId, String keyId) {
 		access.requirePlatformAdmin();
 		ApiKey apiKey = apiKeys.findByIntegrationIdAndKeyId(integrationId, keyId)
 			.orElseThrow(() -> new ResourceNotFoundException(RESOURCE));
-		apiKey.revoke(clock.instant());
-		apiKeys.save(apiKey);
+		apiKey.revoke(clock.instant(), access.principalRef());
+		apiKeys.saveAndFlush(apiKey);
 		audit.record(AuditEvent.success("API_KEY_REVOKED", RESOURCE, keyId)
-			.withDetails(Map.of("integrationId", integrationId.toString())));
+			.withDetails(Map.of("integrationId", integrationId.toString(), "revokedBy", "platform-admin")));
 		return ApiKeyView.of(apiKey);
-	}
-
-	private static void validate(IssueApiKeyCommand command, Instant now) {
-		if (command.scopes() == null || command.scopes().isEmpty()) {
-			throw new InvalidRequestException("scopes", "must contain at least one permission");
-		}
-		if (command.expiresAt() != null) {
-			if (!command.expiresAt().isAfter(now)) {
-				throw new InvalidRequestException("expiresAt", "must be in the future");
-			}
-			if (command.expiresAt().isAfter(now.plus(MAX_VALIDITY))) {
-				throw new InvalidRequestException("expiresAt", "must be at most 730 days in the future");
-			}
-		}
 	}
 
 }

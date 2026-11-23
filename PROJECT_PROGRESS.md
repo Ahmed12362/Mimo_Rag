@@ -5,8 +5,86 @@ Milestone scope and decisions: [docs/roadmap.md](docs/roadmap.md). This file rec
 | Milestone | Status | Branch |
 |---|---|---|
 | M0 — Architecture baseline | ✅ Done (commit `d963e59`) | `chore/m0-architecture-baseline` → `main` |
-| M1 — Integrations, KBs, identity, RLS | ✅ Implemented and verified. **Awaiting approval and commit.** | `feature/m1-integration-kb-foundation` |
+| M1 — Integrations, KBs, identity, RLS | ✅ Done (commit `5db21e9`) | `main` |
+| M1 hardening — key lifecycle, KB-restricted keys, review fixes | ✅ Implemented and verified. **Awaiting approval and commit.** | `fix/m1-hardening` |
 | M2 – M11 | Not started | — |
+
+---
+
+## M1 hardening — findings from the M1 review
+
+**Date:** 2026-11-23 · **Decisions:** D-20 to D-25 · ADR-0011, ADR-0012 · **Migration:** V5 (V2–V4 untouched, already on `main`)
+
+### Delivered (by review finding)
+
+| Finding | Fix |
+|---|---|
+| **H1** Admin could mint content keys | Admins issue only bootstrap keys (`KEY_ROTATE`, 24 h, single use, authenticate only for `POST /api/v1/integration/api-keys`, never with user assertions). Integrations create, rotate and revoke their own keys within an admin-set scope ceiling (`allowedScopes`). The old admin `POST …/api-keys` is removed. |
+| **Q-06** Optional expiry | Expiry is mandatory: default 90 days, maximum 365 days (code + DB CHECK). Overlapping keys; `X-Api-Key-Expires-At` header in the last 14 days. |
+| **M6** Tenant-wide keys only | Optional `knowledgeBaseIds` restriction (composite tenant FK), enforced for services and relayed users. Restricted keys cannot create KBs or create broader keys. |
+| **M1** Transaction-manager edge cases | Failure applying tenant settings rolls back and releases all thread-bound resources. Switching context inside an active transaction is rejected. |
+| **M2** Public context binding | ArchUnit: only `access`, `shared.access`, `shared.persistence` and `jobs` may bind an access context. |
+| **M5 / L3** JWKS robustness | Explicit 5 min cache and at most one re-fetch per 30 s for unknown key ids (Nimbus `JWKSourceBuilder`); 50 KB size limit; no redirects; RSA ≥ 2048 bits (remote and inline); unreachable JWKS → 503. |
+| **M7** Relayed user not attributable to a key | `AccessContext.credential` carries the key; `audit_event.api_key_id` on every row. |
+| **M8** No RLS guard for new tables | `RlsCoverageIntegrationTest`: every table must be classified; tenant tables must FORCE RLS; every RLS table needs a policy. |
+| **L1** Race → 500 | `saveAndFlush` inside `try` for integration, KB, grants and key creation → 409. |
+| **L2** DB round trip per request | Last-use recording throttled in memory (once per key per 5 min per JVM). |
+| (found during testing) | The application clock now ticks in microseconds, matching PostgreSQL precision, so API timestamps equal stored values. |
+| Environment | `.wslconfig` with `memory=6GB`, `processors=6`, `swap=2GB`, `autoMemoryReclaim=gradual` (Docker now reports 6 GB / 6 CPUs). Documented in `docs/local-environment.md`. |
+
+### Automated tests — `./mvnw clean verify` → **BUILD SUCCESS, 187 tests, 0 failures** (M1: 147)
+
+New or extended test classes:
+- `BootstrapKeyRotationIntegrationTest` (11): hand-over, single use, concurrent use (exactly one success), no content access, ceiling, immediate ceiling reduction, expiry bounds and header, overlap rotation, scope requirement, cross-tenant revoke, audit.
+- `KnowledgeBaseRestrictedKeyIntegrationTest` (6).
+- `JwksRotationIntegrationTest` (5): rotation in, rotation out after cache expiry, unknown-kid burst bounded, outage → 503, weak key ignored.
+- `TenantAwareJpaTransactionManagerIntegrationTest` (4), `RlsCoverageIntegrationTest` (2), `ApiKeyAuthenticatorTest` (3).
+- Extended: `RowLevelSecurityIntegrationTest` (+2: key-table policies and DB CHECKs), `KnowledgeBaseApiIntegrationTest` (+1: concurrent duplicates), `UserAssertionIntegrationTest` (+1: audit attribution), `TrustConfigurationValidationTest` (+1: weak RSA), `KnowledgeBaseAccessPolicyTest` (+2), `ArchitectureRulesTest` (+1 rule).
+- The timing and concurrency test classes were rerun twice more: stable.
+
+### Real HTTP checks (local profile; V5 applied to the existing M1 demo database)
+
+```text
+POST /api/v1/admin/integrations (allowedScopes=[KB_READ,KB_MANAGE,DOCUMENT_UPLOAD])  → 201
+POST /api/v1/admin/integrations/{id}/api-keys (old admin content-key endpoint)      → 405
+POST /api/v1/admin/integrations/{id}/bootstrap-keys → 201 keyType BOOTSTRAP, scopes [KEY_ROTATE], expires +24h
+GET  /api/v1/knowledge-bases with the bootstrap key                                  → 401
+POST /api/v1/integration/api-keys with the bootstrap key → 201 STANDARD, expires +90d, createdBy api-key:<bootstrap>
+     (response header X-Api-Key-Expires-At: <bootstrap expiry>)
+Same bootstrap key again                                                             → 401 (consumed)
+Scope TOOL_EXECUTE (outside the ceiling) → 400; validityDays=400 → 400
+Key restricted to 'policies' → lists only 'policies'; X-Api-Key-Expires-At on a 10-day key; creating a KB → 403
+Rotation: create successor → revoke old key → old key 401, new key 200
+Existing M1 integrations after V5 → allowedScopes backfilled from their keys' scopes ([KB_READ, KB_MANAGE])
+```
+
+### Performance (same method as M1: sequential curl, n = 100 after 10 warm-up requests)
+
+| Request path | p50 | p95 | M1 (p50 / p95) |
+|---|---|---|---|
+| `GET /actuator/health` | 8.6 ms | 10.5 ms | 8.4 / 12.6 ms |
+| 401 without credentials | 3.6 ms | 4.6 ms | 3.1 / 4.1 ms |
+| `GET /api/v1/integration` (API key) | 12.7 ms | 15.6 ms | 13.2 / 15.9 ms |
+| `GET /api/v1/knowledge-bases/{id}` | 12.6 ms | 21.4 ms | 13.1 / 16.0 ms |
+| `GET /api/v1/knowledge-bases` (list) | 12.8 ms | 16.8 ms | 13.3 / 16.8 ms |
+| JVM working set | 303 MB | | 322 MB |
+
+The differences are within measurement noise. The throttling saves one database round trip per request, but on this machine that's under 1 ms. One p95 outlier (21.4 ms) on a single path; p50 is unchanged.
+
+### Implementation review
+
+- **SOLID / boundaries:**
+  - admin key operations (`ApiKeyService`) are separated from self-service ones (`SelfServiceKeyService`);
+  - KB restrictions are enforced in one policy (`KnowledgeBaseAccessPolicy`) and the list queries;
+  - `access` still depends only on `integration.application`;
+  - no new module cycles.
+- **Intentional choices:**
+  - `integration_api_key_kb` is RLS-enabled but not FORCEd (the definer lookup must read it), and is classified as a credential table in the coverage test;
+  - `KEY_ROTATE` is implicit in every ceiling (every integration must be able to rotate).
+- **Technical debt:**
+  - rate limiting is still open (M2);
+  - an integration could in principle modify columns of its own key rows through SQL (RLS allows own-row updates; JPA marks them non-updatable). Database CHECKs bound expiry and scopes, and the effective scopes are clamped at authentication by the ceiling;
+  - the Mockito JDK warning remains.
 
 ---
 

@@ -7,11 +7,11 @@ import java.util.UUID;
 import jakarta.validation.Valid;
 
 import com.mimocodes.mimorag.integration.api.admin.AdminIntegrationRequests.ChangeStatusRequest;
-import com.mimocodes.mimorag.integration.api.admin.AdminIntegrationRequests.IssueApiKeyRequest;
+import com.mimocodes.mimorag.integration.api.admin.AdminIntegrationRequests.AllowedScopesRequest;
+import com.mimocodes.mimorag.integration.api.admin.AdminIntegrationRequests.IssueBootstrapKeyRequest;
 import com.mimocodes.mimorag.integration.api.admin.AdminIntegrationRequests.RegisterIntegrationRequest;
 import com.mimocodes.mimorag.integration.api.admin.AdminIntegrationRequests.TrustConfigurationRequest;
 import com.mimocodes.mimorag.integration.application.ApiKeyService;
-import com.mimocodes.mimorag.integration.application.ApiKeyService.IssueApiKeyCommand;
 import com.mimocodes.mimorag.integration.application.ApiKeyView;
 import com.mimocodes.mimorag.integration.application.IntegrationAdminService;
 import com.mimocodes.mimorag.integration.application.IntegrationAdminService.RegisterIntegrationCommand;
@@ -59,7 +59,8 @@ class AdminIntegrationController {
 	ResponseEntity<IntegrationView> register(@CurrentAccess AccessContext access,
 			@Valid @RequestBody RegisterIntegrationRequest request) {
 		IntegrationView created = integrations.register(access,
-				new RegisterIntegrationCommand(request.code(), request.name(), request.description()));
+				new RegisterIntegrationCommand(request.code(), request.name(), request.description(),
+						request.allowedScopes()));
 		return ResponseEntity.created(URI.create("/api/v1/admin/integrations/" + created.id())).body(created);
 	}
 
@@ -82,11 +83,20 @@ class AdminIntegrationController {
 		return integrations.changeStatus(access, integrationId, request.status());
 	}
 
-	@PostMapping("/{integrationId}/api-keys")
-	ResponseEntity<IssuedApiKey> issueApiKey(@CurrentAccess AccessContext access, @PathVariable UUID integrationId,
-			@Valid @RequestBody IssueApiKeyRequest request) {
-		IssuedApiKey issued = apiKeys.issue(access, integrationId,
-				new IssueApiKeyCommand(request.name(), request.scopes(), request.expiresAt()));
+	@PutMapping("/{integrationId}/allowed-scopes")
+	IntegrationView changeAllowedScopes(@CurrentAccess AccessContext access, @PathVariable UUID integrationId,
+			@Valid @RequestBody AllowedScopesRequest request) {
+		return integrations.changeAllowedScopes(access, integrationId, request.allowedScopes());
+	}
+
+	/**
+	 * Hands an integration over: the returned key can only create the integration's first own key (scope
+	 * KEY_ROTATE, 24 hours, single use). Admins cannot create keys that reach tenant content.
+	 */
+	@PostMapping("/{integrationId}/bootstrap-keys")
+	ResponseEntity<IssuedApiKey> issueBootstrapKey(@CurrentAccess AccessContext access,
+			@PathVariable UUID integrationId, @Valid @RequestBody IssueBootstrapKeyRequest request) {
+		IssuedApiKey issued = apiKeys.issueBootstrap(access, integrationId, request.name());
 		return ResponseEntity
 			.created(URI.create("/api/v1/admin/integrations/" + integrationId + "/api-keys/" + issued.key().keyId()))
 			.body(issued);

@@ -12,6 +12,9 @@ public interface ApiKeyRepository extends Repository<ApiKey, UUID> {
 
 	ApiKey save(ApiKey apiKey);
 
+	/** Flushes immediately so constraint and optimistic-lock violations surface inside the service. */
+	ApiKey saveAndFlush(ApiKey apiKey);
+
 	Optional<ApiKey> findByIntegrationIdAndKeyId(UUID integrationId, String keyId);
 
 	List<ApiKey> findTop200ByIntegrationIdOrderByCreatedAtDesc(UUID integrationId);

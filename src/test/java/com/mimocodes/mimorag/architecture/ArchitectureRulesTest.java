@@ -1,5 +1,9 @@
 package com.mimocodes.mimorag.architecture;
 
+import java.util.function.Supplier;
+
+import com.mimocodes.mimorag.shared.access.AccessContext;
+import com.mimocodes.mimorag.shared.access.AccessContextHolder;
 import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
@@ -76,6 +80,21 @@ class ArchitectureRulesTest {
 		.dependOnClassesThat()
 		.resideInAnyPackage(ROOT + ".integration.api..", ROOT + ".integration.infrastructure..")
 		.allowEmptyShould(true);
+
+	/**
+	 * Binding an access context decides which tenant (or the admin plane) the database sees. Only authentication
+	 * ({@code access}), the persistence infrastructure and the future job runner may do it.
+	 */
+	@ArchTest
+	static final ArchRule onlyTrustedCodeBindsAccessContexts = noClasses().that()
+		.resideOutsideOfPackages(ROOT + ".access..", ROOT + ".shared.access..", ROOT + ".shared.persistence..",
+				ROOT + ".jobs..")
+		.should()
+		.callMethod(AccessContextHolder.class, "set", AccessContext.class)
+		.orShould()
+		.callMethod(AccessContextHolder.class, "callAs", AccessContext.class, Supplier.class)
+		.orShould()
+		.callMethod(AccessContextHolder.class, "clear");
 
 	/** JWT/JOSE libraries are confined to the access module. */
 	@ArchTest

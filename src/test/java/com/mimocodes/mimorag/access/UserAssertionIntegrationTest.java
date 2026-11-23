@@ -223,6 +223,20 @@ class UserAssertionIntegrationTest extends PostgresIntegrationTest {
 	}
 
 	@Test
+	void userActionsAreAttributedToTheUserAndTheRelayingKey() throws Exception {
+		String admin = TestTokens.claims(hrisIssuer, AUDIENCE, "emp-77").roles("hr-admin").signRs256(HRIS_RSA);
+		mockMvc.perform(api.asUser(patch("/api/v1/knowledge-bases/{id}", policiesKb), relayKey, admin)
+			.content(api.toJson(Map.of("version", 0, "description", "audited")))).andExpect(status().isOk());
+
+		Map<String, Object> row = new ContextualJdbc(jdbcTemplate, transactionTemplate).as(
+				AccessContext.platformAdmin("t"),
+				jdbc -> jdbc.queryForMap("select principal_ref, api_key_id from audit_event "
+						+ "where action = 'KNOWLEDGE_BASE_UPDATED' and target_id = ?", policiesKb.toString()));
+		assertThat(row).containsEntry("principal_ref", "user:emp-77")
+			.containsEntry("api_key_id", relayKey.split("_")[1]);
+	}
+
+	@Test
 	void rejectedAssertionsAreAudited() throws Exception {
 		mockMvc.perform(api.asUser(get("/api/v1/integration"), relayKey, invalidToken("expired")))
 			.andExpect(status().isUnauthorized());
