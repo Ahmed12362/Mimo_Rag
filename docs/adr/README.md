@@ -1,0 +1,16 @@
+# Architecture Decision Records
+
+Each ADR records one decision: its context, the decision, and its consequences. ADRs are never rewritten after acceptance. A changed decision gets a new ADR that supersedes the old one.
+
+| ADR | Title | Status |
+|---|---|---|
+| [0001](0001-modular-monolith-and-module-boundaries.md) | Modular monolith and module boundaries | Accepted |
+| [0002](0002-provider-abstractions-and-stable-dependencies.md) | Own provider abstractions; stable dependencies only | Accepted |
+| [0003](0003-postgresql-flyway-and-database-roles.md) | PostgreSQL, Flyway and separated database roles | Accepted |
+| [0004](0004-tenant-isolation-and-row-level-security.md) | Tenant isolation with Row-Level Security | Accepted |
+| [0005](0005-identity-and-access-model.md) | Identity and access model | Accepted |
+| [0006](0006-tenant-owned-document-review.md) | Tenant-owned document review with immutable snapshots | Accepted |
+| [0007](0007-async-jobs-and-transactional-outbox.md) | Async jobs and transactional outbox in PostgreSQL | Proposed (confirm in M2) |
+| [0008](0008-api-error-format-correlation-and-logging.md) | API error format, correlation IDs and logging | Accepted |
+
+Template: `# ADR-NNNN: Title` → **Status**, **Date**, **Context**, **Decision**, **Consequences**.

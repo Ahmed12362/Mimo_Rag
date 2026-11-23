@@ -1,0 +1,33 @@
+# Local development dependencies. Usage: copy .env.example to .env, then `docker compose up -d`.
+# Only PostgreSQL is needed for M0. The pgvector image is used now so M4 needs no extra download;
+# the `vector` extension is NOT enabled until a Flyway migration in M4.
+name: mimorag
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.7-pg17
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-mimorag}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      MIMORAG_DB_OWNER_PASSWORD: ${MIMORAG_DB_OWNER_PASSWORD:?set MIMORAG_DB_OWNER_PASSWORD in .env}
+      MIMORAG_DB_APP_PASSWORD: ${MIMORAG_DB_APP_PASSWORD:?set MIMORAG_DB_APP_PASSWORD in .env}
+    ports:
+      # Bound to loopback only; 5433 by default to avoid clashing with a locally installed PostgreSQL.
+      - "127.0.0.1:${MIMORAG_DB_PORT:-5433}:5432"
+    volumes:
+      - mimorag-pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    restart: unless-stopped
+
+volumes:
+  mimorag-pgdata:

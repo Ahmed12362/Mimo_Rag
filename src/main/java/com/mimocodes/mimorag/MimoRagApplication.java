@@ -1,0 +1,15 @@
+package com.mimocodes.mimorag;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+
+@SpringBootApplication
+@ConfigurationPropertiesScan
+public class MimoRagApplication {
+
+	public static void main(String[] args) {
+		SpringApplication.run(MimoRagApplication.class, args);
+	}
+
+}

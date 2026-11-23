@@ -1,0 +1,23 @@
+# Local development profile. Activate with: --spring.profiles.active=local
+# Reads connection settings from the git-ignored ./.env file (see .env.example). Never use in shared environments.
+
+spring:
+  config:
+    import: optional:file:./.env[.properties]
+
+logging:
+  structured:
+    format:
+      console: ""
+  pattern:
+    level: "%5p [cid=%X{correlationId:-}]"
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+
+mimorag:
+  security:
+    public-api-docs: true

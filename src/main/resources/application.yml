@@ -1,0 +1,80 @@
+# Base configuration shared by every environment.
+# Secrets and connection settings come ONLY from environment variables (or, in the `local` profile, a git-ignored
+# .env file). There are deliberately no defaults for passwords or database URLs: a missing value fails fast.
+
+spring:
+  application:
+    name: mimorag
+  autoconfigure:
+    # No in-memory users / generated passwords. Authentication is provided by our own filter chains (M1).
+    exclude: org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
+
+  # Runtime connections use the least-privileged application role (DML only, no DDL, no BYPASSRLS).
+  datasource:
+    url: ${MIMORAG_DB_URL}
+    username: ${MIMORAG_DB_APP_USER:mimorag_app}
+    password: ${MIMORAG_DB_APP_PASSWORD}
+    hikari:
+      pool-name: mimorag-app
+      maximum-pool-size: ${MIMORAG_DB_POOL_SIZE:10}
+      connection-timeout: 3000
+      validation-timeout: 2000
+
+  # Migrations run as the schema owner role; the application role never owns tables.
+  flyway:
+    user: ${MIMORAG_DB_OWNER_USER:mimorag_owner}
+    password: ${MIMORAG_DB_OWNER_PASSWORD}
+    schemas: mimorag
+    default-schema: mimorag
+    locations: classpath:db/migration
+    validate-on-migrate: true
+    clean-disabled: true
+    placeholders:
+      appRole: ${MIMORAG_DB_APP_USER:mimorag_app}
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: mimorag
+
+server:
+  shutdown: graceful
+  error:
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never
+    include-exception: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      # Component names and states (e.g. db: UP/DOWN) are public; internal details are never exposed anonymously.
+      show-components: always
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+
+logging:
+  structured:
+    format:
+      console: ecs
+
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+mimorag:
+  security:
+    public-api-docs: false
