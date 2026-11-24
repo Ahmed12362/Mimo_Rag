@@ -1,6 +1,7 @@
 # Workflow — Document Upload, Page Review, Submission and Ingestion
 
-> Status: **documented, not implemented** (M0, 2026-11-23). Detailed design happens in M2 (extraction), M3 (review, submit and snapshot), M4 (ingestion) and the embeddable review UI milestone (after M4).
+> Status: upload, validation and native extraction **implemented** (M2 slices 2b–2c, 2026-11-24); OCR in 2d; review,
+> submit and snapshot in M3; ingestion in M4; embeddable review UI after M4.
 > Decision: [ADR-0006](../adr/0006-tenant-owned-document-review.md).
 
 ## 1. Purpose
@@ -55,7 +56,7 @@ Every record is tenant-scoped (`integration_id`, protected by RLS) and is either
 | `Document` | Logical document in a KB, with a stable ID across versions | Metadata only |
 | `DocumentVersion` | One uploaded file: storage key, SHA-256, size, page count, uploader | Immutable |
 | `ExtractionRun` | One extraction pass over a version: engine/model versions, timings | Immutable; reprocessing creates a new run |
-| `PageExtraction` | Machine output per page: method (`NATIVE_TEXT` / `OCR` / `MIXED`), text, blocks and bounding boxes, confidence, detected scripts, warnings | **Read-only** |
+| `PageExtraction` | Machine output per page: class (`NATIVE_TEXT` / `OCR_REQUIRED` / `MIXED` / `EMPTY` / `FAILED`), native text (always kept), trusted result text, line boxes, image regions, detected scripts, quality signals, warnings. Implemented in 2c as `page_extraction` (one row per run and page; insert-only) with `extraction_run` | **Read-only** |
 | `PageRevision` | A human edit: new text, author (external user ID), timestamp, base (extraction or previous revision) | Append-only; never overwrites the extraction |
 | `PageReviewState` | Current state per page, with an optimistic-lock version | Mutable while the version is `IN_REVIEW` |
 | `ApprovedSnapshot` | Created on submit: for each page, the approved text (revision or extraction), its content hash and exclusions; plus submitter and timestamp | **Immutable** |

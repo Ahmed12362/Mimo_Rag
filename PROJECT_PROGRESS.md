@@ -9,7 +9,96 @@ Milestone scope and decisions: [docs/roadmap.md](docs/roadmap.md). This file rec
 | M1 hardening — key lifecycle, KB-restricted keys, review fixes | ✅ Done (commits `fa683c7`, `87c8105`) | `fix/m1-hardening` → `main` |
 | M2 slice 2a — OCR benchmark | ✅ Done (commit `4f897f1`); report: [docs/benchmarks/ocr-benchmark-2a.md](docs/benchmarks/ocr-benchmark-2a.md) | `feature/m2-pdf-upload-extraction` |
 | M2 slice 2b — upload, storage, job queue | ✅ Done (committed on the feature branch) | `feature/m2-pdf-upload-extraction` |
-| M2 slices 2c–2e, M3 – M11 | Not started | — |
+| M2 slice 2c — native text extraction | ✅ Done (committed on its branch) | `feature/m2c-native-extraction` |
+| M2 slices 2d–2e, M3 – M11 | Not started | — |
+
+---
+
+## M2 slice 2c — native text extraction
+
+**Date:** 2026-11-24 · **Decisions:** D-37 to D-41 (2c decisions a–e) · ADR-0013 · **Migration:** V7
+
+### Delivered
+
+- **Line builder** (`LineBuilder`, pure Java): lines from glyph positions; marks attached by stream order; spaces and
+  tab cell breaks from gaps; paragraph direction from alignment; visual-to-logical order with left-to-right runs kept.
+- **Page analysis:** `TextQuality` (broken characters, unmapped glyphs, presentation forms, reversed Arabic, letter
+  share, bidi and zero-width characters) and `PageClassifier` (`NATIVE_TEXT`, `OCR_REQUIRED`, `MIXED`, `EMPTY`,
+  `FAILED`; 12 warnings).
+- **PDFBox adapter:** `GlyphCollector` (render mode, fill colour incl. registered colour operators, off-page),
+  `ImageRegionCollector` (image boxes in rotated top-left page coordinates, filled shapes),
+  `PdfBoxNativeTextExtractor` (resource cache off, temp-file cache, per-page timeout with reopen).
+- **Extraction service:** one run per job, batches of 20 pages committed with the run's counters, resume after the
+  highest committed page, failed pages isolated; the job continues from validation into extraction.
+- **Database (V7):** `extraction_run`, `page_extraction` (insert-only for the runtime role, unique per run and page,
+  `result_text` only when trusted), new version states `EXTRACTING`, `EXTRACTED`, `AWAITING_OCR`,
+  `EXTRACTION_FAILED`.
+- **API:** `GET /documents/{id}/extraction`, `GET /documents/{id}/pages`, `GET /documents/{id}/pages/{n}`; job status
+  gains `progress`.
+- **Fixtures:** 9 synthetic digital PDFs + ground truth (124 KB) in `src/test/resources/corpus/synthetic/digital/`.
+- **Docs:** ADR-0013, README, architecture, security architecture, workflow, roadmap (D-37 to D-41), Postman (2.6–2.8).
+
+### Acceptance criteria (all measured)
+
+| # | Criterion | Result | Evidence |
+|---|---|---|---|
+| 1 | Error rate on the fixtures: English, Naskh, Sans 0%; mixed ≤ 2%; table ≤ 10%; Amiri ≤ 5%; diacritics reported | ✅ | `NativeExtractionAccuracyTest` and the same over HTTP: Amiri, table, Latin-in-Arabic **0.00%**, alternating lines **1.04%**, diacritics **1.38%** (PDFBox alone: 22.3%, 53.2%, 14.0%, 7.8%, 72.4%) |
+| 2 | Classification of every class; unreliable text → `OCR_REQUIRED` and not exposed | ✅ | `PageClassifierTest` (15), `PdfBoxNativeTextExtractorTest` (7); HTTP: 43 MB scan → `OCR_REQUIRED`, `text: null` |
+| 3 | Hidden content flagged, text kept | ✅ | Invisible, white, tiny, off-page, bidi, zero-width: unit, PDF-level and HTTP |
+| 4 | 500 pages: flat memory, API within 2×, resume without duplicates | ✅ | See measurements; `crashedExtractionResumesAfterTheLastCommittedPageWithoutDuplicates`, concurrent duplicate insert → 1 row |
+| 5 | Page text needs `DOCUMENT_REVIEW`; read-only rows; identical 404s; RLS coverage | ✅ | `NativeExtractionIntegrationTest` (upload-only: 200 summary, 403 pages; other tenant 404; UPDATE/DELETE → permission denied); `RlsCoverageIntegrationTest` |
+| 6 | Quality gates | ✅ | 314 tests, real HTTP checks, docs, Postman |
+
+### Automated tests — `./mvnw clean verify` → **BUILD SUCCESS, 314 tests, 0 failures** (2b: 267)
+
+New: `LineBuilderTest` (14), `PageClassifierTest` (15), `PdfBoxNativeTextExtractorTest` (7),
+`NativeExtractionAccuracyTest` (1, 8 page targets), `NativeExtractionIntegrationTest` (10). Three 2b assertions changed
+from `VALIDATED` to `EXTRACTED`, because the job now continues into extraction (planned behaviour change, not a
+weaker test).
+
+**Defects found by these tests and fixed before commit:** (1) reads outside a transaction saw no rows under RLS
+(the isolation worked; the code was wrong); (2) white text was never detected because PDFBox's text engine ignores
+colour operators; (3) a short page of broken characters passed as trusted text (the check now applies from 5
+characters); (4) page direction by letter count was wrong on an Arabic page with more Latin letters (now by alignment).
+
+### Real HTTP checks (local profile; V7 applied to the existing database with 2b data)
+
+```text
+ar_policy_amiri     → EXTRACTED, NATIVE_TEXT, CER 0.00%
+mixed_ar_en_naskh   → EXTRACTED, NATIVE_TEXT, CER 0.00%, warnings [MIXED_DIRECTION_LINE]
+ar_table_naskh      → EXTRACTED, NATIVE_TEXT, CER 0.00%
+mixed_lines_sans    → EXTRACTED, NATIVE_TEXT, CER 1.04%, warnings [MIXED_DIRECTION_LINE]
+ar_diacritics_amiri → EXTRACTED, NATIVE_TEXT, CER 1.38%
+43 MB image page    → AWAITING_OCR, OCR_REQUIRED, text null, image coverage 1.00
+upload-only key     → /extraction 200, /pages 403, /pages/1 403
+500-page text PDF   → 202 in 74 ms; EXTRACTED; progress 500/500; listing totalItems 500
+```
+
+### Measurements (local laptop; measured, not estimated)
+
+| Measurement | Value |
+|---|---|
+| 500-page text PDF (40 lines per page): upload → extracted | 7.2 s (14.5 ms per page, validation included) |
+| Per-page extraction time (stored `duration_ms`, 500 pages) | p50 6 ms · p95 17 ms · max 107 ms |
+| `GET /knowledge-bases/{id}` idle vs during extraction | p95 15.5 ms vs 16.7 ms (max 32 ms, n = 235) |
+| Heap after full GC, before vs after a second 500-page extraction | 54 MB vs 54 MB (nothing retained per page) |
+| Peak heap (includes uncollected garbage): 5-page vs 500-page document | 82 MB vs 113 MB |
+| Temporary files left after the run | 0 |
+
+### Implementation review
+
+1. **Clean Code / SOLID:** the PDF library only collects facts; interpretation lives in small pure classes
+   (`LineBuilder`, `TextQuality`, `PageClassifier`) with their own tests; `KnowledgeBaseGate` removes a duplicated
+   access check shared by the document and page queries.
+2. **Intentional choices:** page rows via JDBC (jsonb, arrays, `ON CONFLICT`), runs via JPA; tab characters separate
+   table cells (scored as spaces); line boxes stored as character offsets into the native text.
+3. **Module dependencies:** unchanged (`ingestion → knowledgebase.application, jobs.application, shared`).
+4. **Limitations (measured or known):**
+   - one remaining ambiguous case (1.04%): a full-width English line on an Arabic page puts its final period first;
+   - multi-column layouts on one baseline read across columns (tab-separated);
+   - thresholds tuned on synthetic pages; must be checked on authorised real documents;
+   - producers that write right-to-left text with marks in unusual stream orders were not available to test.
+5. **Not measured:** extraction of real HR documents, photocopies or phone photos (no authorised samples yet).
 
 ---
 

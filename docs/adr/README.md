@@ -16,5 +16,6 @@ Each ADR records one decision: its context, the decision, and its consequences. 
 | [0010](0010-credentials-and-database-enforced-isolation.md) | Credential formats and database-enforced isolation | Accepted (issuance amended by 0012) |
 | [0011](0011-postgresql-job-queue-without-outbox.md) | PostgreSQL job queue without an outbox table | Accepted (implemented in M2) |
 | [0012](0012-api-key-lifecycle-and-restrictions.md) | API key lifecycle: bootstrap hand-over, self-service rotation, scope ceiling, KB restrictions | Accepted |
+| [0013](0013-native-text-extraction-line-builder.md) | Native PDF text through our own right-to-left-aware line builder | Accepted (M2 slice 2c) |
 
 Template: `# ADR-NNNN: Title` → **Status**, **Date**, **Context**, **Decision**, **Consequences**.

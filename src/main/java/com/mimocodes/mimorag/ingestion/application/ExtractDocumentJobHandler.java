@@ -32,12 +32,13 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * Worker for {@code EXTRACT_DOCUMENT}. Slice 2b: re-checks that the Knowledge Base still accepts the work, verifies
- * the stored file's integrity, and checks the PDF structure (encrypted, corrupt, empty, too many pages) to record the
- * page count. Text extraction (2c) and OCR (2d) will continue from the validated state.
- * <p>
- * Idempotent: a version that is already validated is left as it is. No database transaction is held while the file
- * is read or parsed.
+ * Worker for {@code EXTRACT_DOCUMENT}: re-checks that the Knowledge Base still accepts the work, then
+ * <ol>
+ * <li>validates (2b): stored file integrity, PDF structure, page count;</li>
+ * <li>extracts native text page by page (2c, {@link NativeExtractionService}).</li>
+ * </ol>
+ * OCR (2d) continues from {@code AWAITING_OCR}. Every step is idempotent: a resumed or retried job skips what is done.
+ * No database transaction is held while the file is read or parsed.
  */
 @Component
 class ExtractDocumentJobHandler implements JobHandler {
@@ -64,9 +65,12 @@ class ExtractDocumentJobHandler implements JobHandler {
 
 	private final TransactionTemplate transaction;
 
+	private final NativeExtractionService extraction;
+
 	ExtractDocumentJobHandler(KnowledgeBaseService knowledgeBases, DocumentVersionRepository versions,
 			DocumentStorage storage, PdfInspector inspector, AuditRecorder audit, IngestionProperties properties,
-			Clock clock, PlatformTransactionManager transactionManager) {
+			Clock clock, PlatformTransactionManager transactionManager, NativeExtractionService extraction) {
+		this.extraction = extraction;
 		this.knowledgeBases = knowledgeBases;
 		this.versions = versions;
 		this.storage = storage;
@@ -95,10 +99,19 @@ class ExtractDocumentJobHandler implements JobHandler {
 			}
 			return v;
 		});
-		if (version.getStatus() == DocumentVersionStatus.VALIDATED) {
-			return;
+		if (version.getStatus() == DocumentVersionStatus.VALIDATING) {
+			validate(execution, version);
 		}
+		// Inside a transaction: only then is the tenant applied for Row-Level Security.
+		DocumentVersionStatus status = transaction.execute(tx -> load(execution, versionId).getStatus());
+		if (status == DocumentVersionStatus.VALIDATED || status == DocumentVersionStatus.EXTRACTING) {
+			extraction.extract(execution, versionId);
+		}
+	}
 
+	/** Slice 2b: integrity, structure and page count. */
+	private void validate(JobExecution execution, DocumentVersion version) {
+		UUID versionId = version.getId();
 		int pages;
 		try {
 			pages = storage.withLocalFile(version.getStorageKey(), path -> {
@@ -134,10 +147,13 @@ class ExtractDocumentJobHandler implements JobHandler {
 		UUID versionId = execution.requireUuid("versionId");
 		transaction.executeWithoutResult(status -> {
 			DocumentVersion v = load(execution, versionId);
+			extraction.failRun(v.getIntegrationId(), execution.jobId(), errorCode);
 			if (v.markFailed(errorCode, clock.instant())) {
 				versions.saveAndFlush(v);
-				audit.record(new AuditEvent("DOCUMENT_VALIDATION_FAILED", "document", v.getDocumentId().toString(),
-						AuditOutcome.FAILURE, Map.of("versionId", v.getId().toString(), "errorCode", errorCode)));
+				String action = v.getStatus() == DocumentVersionStatus.EXTRACTION_FAILED ? "DOCUMENT_EXTRACTION_FAILED"
+						: "DOCUMENT_VALIDATION_FAILED";
+				audit.record(new AuditEvent(action, "document", v.getDocumentId().toString(), AuditOutcome.FAILURE,
+						Map.of("versionId", v.getId().toString(), "errorCode", errorCode)));
 			}
 		});
 	}

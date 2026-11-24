@@ -2,11 +2,13 @@ package com.mimocodes.mimorag.ingestion.application;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import com.mimocodes.mimorag.ingestion.domain.Document;
 import com.mimocodes.mimorag.ingestion.domain.DocumentVersion;
 import com.mimocodes.mimorag.ingestion.domain.DocumentVersionStatus;
+import com.mimocodes.mimorag.ingestion.domain.ExtractionRun;
 import com.mimocodes.mimorag.jobs.application.JobQueue.JobView;
 import com.mimocodes.mimorag.jobs.application.JobStatus;
 
@@ -72,14 +74,21 @@ public final class DocumentViews {
 	/** Status of an ingestion job, linked to the document version it processes. */
 	public record IngestionJobView(UUID id, String kind, JobStatus status, int attempts, int maxAttempts,
 			String errorCode, boolean retryable, UUID knowledgeBaseId, UUID documentId, UUID versionId,
-			DocumentVersionStatus versionStatus, Integer pageCount, Instant createdAt, Instant startedAt,
-			Instant finishedAt, Instant nextAttemptAt) {
+			DocumentVersionStatus versionStatus, Integer pageCount, Progress progress, Instant createdAt,
+			Instant startedAt, Instant finishedAt, Instant nextAttemptAt) {
 
-		static IngestionJobView of(JobView job, DocumentVersion version) {
+		/** Pages extracted so far; {@code null} before extraction starts. */
+		public record Progress(int pagesDone, int pagesTotal) {
+		}
+
+		static IngestionJobView of(JobView job, DocumentVersion version,
+				Optional<ExtractionRun> run) {
 			return new IngestionJobView(job.id(), job.kind(), job.status(), job.attempts(), job.maxAttempts(),
 					job.errorCode(), canRetry(job),
 					version.getKnowledgeBaseId(), version.getDocumentId(), version.getId(), version.getStatus(),
-					version.getPageCount(), job.createdAt(), job.startedAt(), job.finishedAt(),
+					version.getPageCount(),
+					run.map(r -> new Progress(r.getPagesDone(), r.getPagesTotal())).orElse(null), job.createdAt(),
+					job.startedAt(), job.finishedAt(),
 					job.status() == JobStatus.RETRY_SCHEDULED ? job.runAfter() : null);
 		}
 

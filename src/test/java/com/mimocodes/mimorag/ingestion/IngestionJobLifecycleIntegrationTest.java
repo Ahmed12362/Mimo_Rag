@@ -89,7 +89,7 @@ class IngestionJobLifecycleIntegrationTest extends PostgresIntegrationTest {
 
 		JsonNode done = api.awaitJob(key, upload.get("jobId").asString(), JOB_TIMEOUT);
 		assertThat(done.get("status").asString()).isEqualTo("SUCCEEDED");
-		assertThat(done.get("versionStatus").asString()).isEqualTo("VALIDATED");
+		assertThat(done.get("versionStatus").asString()).isEqualTo("EXTRACTED");
 		assertThat(done.get("errorCode").isNull()).isTrue();
 	}
 

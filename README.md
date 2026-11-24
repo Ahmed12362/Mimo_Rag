@@ -105,6 +105,20 @@ curl -X POST localhost:8080/api/v1/ingestion-jobs/<jobId>/retry -H "X-Api-Key: m
 | Job `FAILED` with `PDF_ENCRYPTED`, `PDF_CORRUPT`, `PDF_EMPTY`, `PDF_TOO_MANY_PAGES` | Found by the worker; not retryable |
 | Job `CANCELLED_REVALIDATION` | The uploading key was revoked or expired, or the Knowledge Base was archived, before processing; retryable |
 
+After validation the same job extracts the native text page by page (slice 2c). The version ends as `EXTRACTED` (every
+page has usable text) or `AWAITING_OCR` (some pages are scans, drawn as shapes, mixed with large images, or have an
+unreliable text layer; OCR arrives in slice 2d).
+
+```bash
+curl localhost:8080/api/v1/documents/<documentId>/extraction -H "X-Api-Key: mrk_..."   # progress, pages per class
+curl localhost:8080/api/v1/documents/<documentId>/pages -H "X-Api-Key: mrk_..."        # class, scripts, warnings (no text)
+curl localhost:8080/api/v1/documents/<documentId>/pages/1 -H "X-Api-Key: mrk_..."      # page text, line boxes, image regions
+```
+
+Page listings and text need `DOCUMENT_REVIEW`. `text` is `null` when the page needs OCR or its native text cannot be
+trusted. Warnings such as `INVISIBLE_TEXT`, `WHITE_TEXT`, `MIXED_DIRECTION_LINE` flag content for review; the text
+itself is never changed.
+
 ## Test
 
 ```bash

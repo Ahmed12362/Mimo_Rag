@@ -23,7 +23,7 @@ class RlsCoverageIntegrationTest extends PostgresIntegrationTest {
 
 	/** Tenant content: RLS enabled AND forced, no admin exception. */
 	private static final Set<String> TENANT_CONTENT = Set.of("knowledge_base", "knowledge_base_role_grant",
-			"document", "document_version", "job");
+			"document", "document_version", "job", "extraction_run", "page_extraction");
 
 	/**
 	 * Platform and credential metadata: RLS enabled but not forced, because SECURITY DEFINER authentication

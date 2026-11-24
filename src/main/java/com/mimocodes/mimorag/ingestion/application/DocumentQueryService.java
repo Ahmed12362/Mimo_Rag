@@ -2,6 +2,7 @@ package com.mimocodes.mimorag.ingestion.application;
 
 import java.time.Clock;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
@@ -12,7 +13,7 @@ import com.mimocodes.mimorag.ingestion.application.DocumentViews.DocumentSummary
 import com.mimocodes.mimorag.ingestion.application.DocumentViews.IngestionJobView;
 import com.mimocodes.mimorag.ingestion.domain.Document;
 import com.mimocodes.mimorag.ingestion.domain.DocumentVersion;
-import com.mimocodes.mimorag.ingestion.domain.DocumentVersionStatus;
+import com.mimocodes.mimorag.ingestion.domain.ExtractionRun;
 import com.mimocodes.mimorag.jobs.application.JobQueue;
 import com.mimocodes.mimorag.jobs.application.JobQueue.JobView;
 import com.mimocodes.mimorag.jobs.application.JobStatus;
@@ -39,8 +40,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class DocumentQueryService {
 
-	private static final Set<Permission> READ_PERMISSIONS = Set.of(Permission.DOCUMENT_UPLOAD,
-			Permission.DOCUMENT_REVIEW);
+	private static final Set<Permission> READ_PERMISSIONS = KnowledgeBaseGate.DOCUMENT_PERMISSIONS;
 
 	private final KnowledgeBaseService knowledgeBases;
 
@@ -54,8 +54,15 @@ public class DocumentQueryService {
 
 	private final Clock clock;
 
+	private final KnowledgeBaseGate gate;
+
+	private final ExtractionRunRepository runs;
+
 	DocumentQueryService(KnowledgeBaseService knowledgeBases, DocumentRepository documents,
-			DocumentVersionRepository versions, JobQueue jobs, AuditRecorder audit, Clock clock) {
+			DocumentVersionRepository versions, JobQueue jobs, AuditRecorder audit, Clock clock, KnowledgeBaseGate gate,
+			ExtractionRunRepository runs) {
+		this.gate = gate;
+		this.runs = runs;
 		this.knowledgeBases = knowledgeBases;
 		this.documents = documents;
 		this.versions = versions;
@@ -99,7 +106,7 @@ public class DocumentQueryService {
 		JobView job = loadJob(access, jobId);
 		DocumentVersion version = versionOf(access, job);
 		requireReadable(access, version.getKnowledgeBaseId(), "ingestion-job");
-		return IngestionJobView.of(job, version);
+		return IngestionJobView.of(job, version, runOf(access, job));
 	}
 
 	/**
@@ -116,7 +123,7 @@ public class DocumentQueryService {
 			throw new OperationNotPermittedException(Permission.DOCUMENT_UPLOAD);
 		}
 		if (!job.status().isFinished()) {
-			return IngestionJobView.of(job, version);
+			return IngestionJobView.of(job, version, runOf(access, job));
 		}
 		if (job.status() == JobStatus.SUCCEEDED) {
 			throw new ConflictException("The job already succeeded.");
@@ -127,13 +134,18 @@ public class DocumentQueryService {
 		if (!jobs.requeue(access, jobId)) {
 			throw new ConflictException("The job changed concurrently. Reload it and retry.");
 		}
-		if (version.getStatus() == DocumentVersionStatus.VALIDATION_FAILED) {
+		if (version.isFailed()) {
 			version.resetForRetry(clock.instant());
 			versions.saveAndFlush(version);
 		}
 		audit.record(AuditEvent.success("INGESTION_JOB_RETRIED", "ingestion-job", jobId)
 			.withDetails(Map.of("previousErrorCode", String.valueOf(job.errorCode()))));
-		return IngestionJobView.of(loadJob(access, jobId), version);
+		return IngestionJobView.of(loadJob(access, jobId), version, runOf(access, job));
+	}
+
+	private Optional<ExtractionRun> runOf(AccessContext access,
+			JobView job) {
+		return runs.findByIntegrationIdAndJobId(access.requireIntegrationId(), job.id());
 	}
 
 	private JobView loadJob(AccessContext access, UUID jobId) {
@@ -149,17 +161,7 @@ public class DocumentQueryService {
 
 	/** The Knowledge Base, if the caller may read its documents; otherwise "not found" for {@code resource}. */
 	private KnowledgeBaseView requireReadable(AccessContext access, UUID knowledgeBaseId, String resource) {
-		KnowledgeBaseView kb;
-		try {
-			kb = knowledgeBases.get(access, knowledgeBaseId);
-		}
-		catch (ResourceNotFoundException invisible) {
-			throw new ResourceNotFoundException(resource);
-		}
-		if (READ_PERMISSIONS.stream().noneMatch(kb.yourPermissions()::contains)) {
-			throw new ResourceNotFoundException(resource);
-		}
-		return kb;
+		return gate.requireDocumentAccess(access, knowledgeBaseId, resource);
 	}
 
 }

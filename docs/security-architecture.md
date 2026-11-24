@@ -258,6 +258,17 @@ These events are audited, as append-only records with integration, principal, ac
 | Job context snapshots hold identifiers and scopes only, never secrets | `JobContextSnapshot` | `JobQueueIntegrationTest` |
 | Client file names cleaned of path parts, control, bidi and zero-width characters | `UntrustedText` | `UntrustedTextTest` |
 
+### Implemented in M2 slice 2c
+
+| Control | Where | Verified by |
+|---|---|---|
+| Hidden text (invisible render mode, white, under 1 pt, off-page) flagged per page; text kept unchanged | `GlyphCollector`, `PageClassifier` | `PdfBoxNativeTextExtractorTest`, `PageClassifierTest`, `NativeExtractionIntegrationTest` |
+| Bidi control and zero-width characters flagged, never removed | `TextQuality`, `PageClassifier` | `PageClassifierTest` |
+| Unreliable native text (broken mapping, presentation forms, reversed Arabic, few letters) stored but never returned as page text | `TextQuality`, `PageClassifier`, V7 CHECK `result_text IS NULL OR native_text_trusted` | `PageClassifierTest` |
+| Page text requires `DOCUMENT_REVIEW`; upload-only keys see the summary only; others get 404 | `PageQueryService` | `NativeExtractionIntegrationTest` |
+| Page rows are insert-only for the runtime role; unique per run and page (crash and concurrency safe) | V7 (`REVOKE UPDATE, DELETE`, unique constraint, `ON CONFLICT DO NOTHING`) | `NativeExtractionIntegrationTest` |
+| Bounded memory and time per page (resource cache off, temp-file stream cache, glyph and text caps, per-page timeout) | `PdfBoxNativeTextExtractor`, `PageClassifier` | measured in `PROJECT_PROGRESS.md` (2c) |
+
 **Not yet implemented (planned):** general API rate limiting (per-integration upload quotas exist since M2), `jti`
 replay cache for user assertions on write operations (uploads accept assertions; open item from slice 2b), admin
 OIDC login (Q-02), audit read API.

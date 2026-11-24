@@ -141,7 +141,7 @@ class LocalDocumentStorageTest {
 
 	private LocalDocumentStorage storage() {
 		return new LocalDocumentStorage(new IngestionProperties(root, DataSize.ofMegabytes(50), 500, 20,
-				DataSize.ofGigabytes(2), Duration.ofSeconds(30), Duration.ofSeconds(60)));
+				DataSize.ofGigabytes(2), Duration.ofSeconds(30), Duration.ofSeconds(60), Duration.ofSeconds(30), 20));
 	}
 
 	private Stream<Path> tempFilesStream() throws IOException {

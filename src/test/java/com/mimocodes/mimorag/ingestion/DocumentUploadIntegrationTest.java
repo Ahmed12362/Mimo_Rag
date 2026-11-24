@@ -76,7 +76,7 @@ class DocumentUploadIntegrationTest extends PostgresIntegrationTest {
 
 		JsonNode job = api.awaitJob(key, jobId, JOB_TIMEOUT);
 		assertThat(job.get("status").asString()).isEqualTo("SUCCEEDED");
-		assertThat(job.get("versionStatus").asString()).isEqualTo("VALIDATED");
+		assertThat(job.get("versionStatus").asString()).isEqualTo("EXTRACTED"); // 2c: validation continues into extraction
 		assertThat(job.get("pageCount").asInt()).isEqualTo(3);
 
 		String documentId = body.get("documentId").asString();
@@ -91,7 +91,7 @@ class DocumentUploadIntegrationTest extends PostgresIntegrationTest {
 
 		JsonNode list = api.readJson(api.withKey(get("/api/v1/knowledge-bases/{id}/documents", kb), key), 200);
 		assertThat(list.get("totalItems").asInt()).isEqualTo(1);
-		assertThat(list.get("items").get(0).get("currentVersion").get("status").asString()).isEqualTo("VALIDATED");
+		assertThat(list.get("items").get(0).get("currentVersion").get("status").asString()).isEqualTo("EXTRACTED");
 
 		Path stored = Path.of("target/test-storage", integrationId.toString(), documentId,
 				body.get("versionId").asString(), "original.pdf");

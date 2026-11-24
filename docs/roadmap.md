@@ -17,7 +17,7 @@ _Last updated: 2026-11-24._
 | M0 — Repository inspection and architecture baseline | ✅ Done (committed `d963e59`; `main` created at this commit) |
 | M1 — Integration and Knowledge Base foundation (identity, RLS) | ✅ Done (`5db21e9` on `main`) |
 | M1 hardening — key lifecycle, KB-restricted keys, review fixes | ✅ Done (`fa683c7`, `87c8105` on `main`) |
-| M2 — PDF upload and extraction | **In progress** on `feature/m2-pdf-upload-extraction`: 2a OCR benchmark ✅ (`4f897f1`), 2b upload and job queue ✅ done, 2c–2e not started |
+| M2 — PDF upload and extraction | **In progress** on `feature/m2-pdf-upload-extraction`: 2a OCR benchmark ✅ (`4f897f1`), 2b upload and job queue ✅ (`6a4e36d`), 2c native extraction ✅ (`feature/m2c-native-extraction`), 2d–2e not started |
 | M3 — Review, submit and approved snapshot (API-first) | Not started |
 | M4 — Chunking, embeddings, indexing | Not started |
 | M4b — Embeddable review UI | Not started (after M4) |
@@ -65,6 +65,11 @@ Detailed acceptance results: [`PROJECT_PROGRESS.md`](../PROJECT_PROGRESS.md).
 | D-34 | Human review and approval are mandatory between OCR and any RAG processing; originals and OCR output are preserved and corrections tracked | [ocr-benchmark-2a.md](benchmarks/ocr-benchmark-2a.md) §7.4, ADR-0006 |
 | D-35 | Uploading a new version of an existing document is deferred to M3 (re-review and snapshots); 2b creates new documents only | M2 plan, slice 2b |
 | D-36 | Job retries: 3 attempts for transient failures, backoff about 30 s, 2 min, 8 min with jitter; permanent failures are not retried; cancelled jobs can be requeued | M2 plan, slice 2b; ADR-0011 |
+| D-37 | Native text through our own right-to-left-aware line builder (2c decision a) | [ADR-0013](adr/0013-native-text-extraction-line-builder.md) |
+| D-38 | Page text and page listings need `DOCUMENT_REVIEW`; upload-only credentials see extraction summaries and page counts (2c decision b) | Slice 2c |
+| D-39 | The 9 synthetic digital PDFs and their ground truth are committed as regression fixtures (2c decision c) | `src/test/resources/corpus/synthetic/` |
+| D-40 | Hidden or suspicious content is kept and flagged, never removed (2c decision d) | Slice 2c |
+| D-41 | Unreliable native text is stored internally, flagged `NATIVE_TEXT_UNRELIABLE`, classified `OCR_REQUIRED`, and never returned as the page result (2c decision e) | Slice 2c, V7 CHECK |
 
 ### 0.3 Git workflow
 

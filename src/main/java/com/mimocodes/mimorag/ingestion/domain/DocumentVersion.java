@@ -134,23 +134,52 @@ public class DocumentVersion {
 		this.updatedAt = now;
 	}
 
-	/** Records a failure; a version that was already validated keeps its result (a late failure cannot undo it). */
+	public void startExtraction(Instant now) {
+		requireStatus(DocumentVersionStatus.VALIDATED, DocumentVersionStatus.EXTRACTING);
+		this.status = DocumentVersionStatus.EXTRACTING;
+		this.updatedAt = now;
+	}
+
+	/** @param needsOcr some pages (or image regions) need OCR */
+	public void finishExtraction(boolean needsOcr, Instant now) {
+		requireStatus(DocumentVersionStatus.EXTRACTING);
+		this.status = needsOcr ? DocumentVersionStatus.AWAITING_OCR : DocumentVersionStatus.EXTRACTED;
+		this.updatedAt = now;
+	}
+
+	/**
+	 * Records a failure in the phase the version is in. A finished extraction keeps its result (a late failure, e.g.
+	 * a lost lease, cannot undo it).
+	 */
 	public boolean markFailed(String code, Instant now) {
-		if (status == DocumentVersionStatus.VALIDATED) {
+		DocumentVersionStatus failed = switch (status) {
+			case UPLOADED, VALIDATING, VALIDATION_FAILED -> DocumentVersionStatus.VALIDATION_FAILED;
+			case VALIDATED, EXTRACTING, EXTRACTION_FAILED -> DocumentVersionStatus.EXTRACTION_FAILED;
+			case EXTRACTED, AWAITING_OCR -> null;
+		};
+		if (failed == null) {
 			return false;
 		}
-		this.status = DocumentVersionStatus.VALIDATION_FAILED;
+		this.status = failed;
 		this.failureCode = Objects.requireNonNull(code, "code");
 		this.updatedAt = now;
 		return true;
 	}
 
-	/** Back to the queue after an authorised manual retry. */
+	/**
+	 * Back to the queue after an authorised manual retry: a validation failure starts over, an extraction failure
+	 * resumes from the validated state (pages already extracted are kept).
+	 */
 	public void resetForRetry(Instant now) {
-		requireStatus(DocumentVersionStatus.VALIDATION_FAILED);
-		this.status = DocumentVersionStatus.UPLOADED;
+		requireStatus(DocumentVersionStatus.VALIDATION_FAILED, DocumentVersionStatus.EXTRACTION_FAILED);
+		this.status = status == DocumentVersionStatus.VALIDATION_FAILED ? DocumentVersionStatus.UPLOADED
+				: DocumentVersionStatus.VALIDATED;
 		this.failureCode = null;
 		this.updatedAt = now;
+	}
+
+	public boolean isFailed() {
+		return status == DocumentVersionStatus.VALIDATION_FAILED || status == DocumentVersionStatus.EXTRACTION_FAILED;
 	}
 
 	private void requireStatus(DocumentVersionStatus... allowed) {
