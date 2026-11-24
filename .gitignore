@@ -31,6 +31,10 @@ data/
 !src/test/resources/corpus/synthetic/**/*.pdf
 benchmarks/results/
 
+### Python (benchmarks, OCR service) ###
+__pycache__/
+*.pyc
+
 ### Logs ###
 *.log
 logs/
