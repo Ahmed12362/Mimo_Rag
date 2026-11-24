@@ -6,7 +6,7 @@ Milestone scope and decisions: [docs/roadmap.md](docs/roadmap.md). This file rec
 |---|---|---|
 | M0 — Architecture baseline | ✅ Done (commit `d963e59`) | `chore/m0-architecture-baseline` → `main` |
 | M1 — Integrations, KBs, identity, RLS | ✅ Done (commit `5db21e9`) | `main` |
-| M1 hardening — key lifecycle, KB-restricted keys, review fixes | ✅ Implemented and verified. **Awaiting approval and commit.** | `fix/m1-hardening` |
+| M1 hardening — key lifecycle, KB-restricted keys, review fixes | ✅ Done (commits `fa683c7`, `87c8105`) | `fix/m1-hardening` → `main` |
 | M2 – M11 | Not started | — |
 
 ---
