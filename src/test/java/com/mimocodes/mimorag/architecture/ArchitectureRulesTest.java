@@ -104,6 +104,37 @@ class ArchitectureRulesTest {
 		.dependOnClassesThat()
 		.resideInAnyPackage("com.nimbusds..", "org.springframework.security.oauth2..", "io.jsonwebtoken..");
 
+	/** The PDF library parses untrusted input; it is confined behind the ingestion ports. */
+	@ArchTest
+	static final ArchRule pdfLibraryOnlyInIngestionInfrastructure = noClasses().that()
+		.resideOutsideOfPackage(ROOT + ".ingestion.infrastructure..")
+		.should()
+		.dependOnClassesThat()
+		.resideInAnyPackage("org.apache.pdfbox..", "org.apache.fontbox..");
+
+	/**
+	 * The job runner is generic: modules plug in handlers, and the runner never depends on them. Its only feature
+	 * dependency is credential re-validation through the integration module's application layer.
+	 */
+	@ArchTest
+	static final ArchRule jobsDependOnNoBusinessModule = noClasses().that()
+		.resideInAPackage(ROOT + ".jobs..")
+		.should()
+		.dependOnClassesThat()
+		.resideInAnyPackage(ROOT + ".knowledgebase..", ROOT + ".ingestion..", ROOT + ".review..",
+				ROOT + ".indexing..", ROOT + ".retrieval..", ROOT + ".tools..", ROOT + ".agent..",
+				ROOT + ".integration.api..", ROOT + ".integration.infrastructure..")
+		.allowEmptyShould(true);
+
+	/** Ingestion uses Knowledge Bases only through their public application services (and their view types). */
+	@ArchTest
+	static final ArchRule ingestionUsesKnowledgeBaseApplicationLayer = noClasses().that()
+		.resideInAPackage(ROOT + ".ingestion..")
+		.should()
+		.dependOnClassesThat()
+		.resideInAnyPackage(ROOT + ".knowledgebase.api..", ROOT + ".knowledgebase.infrastructure..")
+		.allowEmptyShould(true);
+
 	@ArchTest
 	static final ArchRule apiLayerDoesNotReachIntoInfrastructure = noClasses().that()
 		.resideInAPackage("..api..")

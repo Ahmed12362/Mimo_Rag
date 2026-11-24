@@ -9,7 +9,10 @@ import jakarta.validation.ConstraintViolationException;
 import com.mimocodes.mimorag.shared.error.ConflictException;
 import com.mimocodes.mimorag.shared.error.InvalidRequestException;
 import com.mimocodes.mimorag.shared.error.OperationNotPermittedException;
+import com.mimocodes.mimorag.shared.error.PayloadTooLargeException;
+import com.mimocodes.mimorag.shared.error.QuotaExceededException;
 import com.mimocodes.mimorag.shared.error.ResourceNotFoundException;
+import com.mimocodes.mimorag.shared.error.UnsupportedContentException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
@@ -87,6 +90,30 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 	ResponseEntity<ProblemDetail> handleConflict(ConflictException ex) {
 		return ResponseEntity.status(HttpStatus.CONFLICT)
 			.body(ApiProblems.of(HttpStatus.CONFLICT, ApiErrorCode.CONFLICT, ex.getMessage()));
+	}
+
+	@ExceptionHandler(QuotaExceededException.class)
+	ResponseEntity<ProblemDetail> handleQuotaExceeded(QuotaExceededException ex) {
+		boolean queue = ex.getQuota() == QuotaExceededException.Quota.UPLOAD_QUEUE;
+		HttpStatus status = queue ? HttpStatus.TOO_MANY_REQUESTS : HttpStatus.CONTENT_TOO_LARGE;
+		ApiErrorCode code = queue ? ApiErrorCode.UPLOAD_QUEUE_FULL : ApiErrorCode.STORAGE_QUOTA_EXCEEDED;
+		ResponseEntity.BodyBuilder response = ResponseEntity.status(status);
+		ex.getRetryAfter().ifPresent(delay -> response.header(HttpHeaders.RETRY_AFTER,
+				Long.toString(Math.max(1, delay.toSeconds()))));
+		return response.body(ApiProblems.of(status, code, ex.getMessage()));
+	}
+
+	@ExceptionHandler(UnsupportedContentException.class)
+	ResponseEntity<ProblemDetail> handleUnsupportedContent(UnsupportedContentException ex) {
+		return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+			.body(ApiProblems.of(HttpStatus.UNSUPPORTED_MEDIA_TYPE, ApiErrorCode.UNSUPPORTED_MEDIA_TYPE,
+					ex.getMessage()));
+	}
+
+	@ExceptionHandler(PayloadTooLargeException.class)
+	ResponseEntity<ProblemDetail> handlePayloadTooLarge(PayloadTooLargeException ex) {
+		return ResponseEntity.status(HttpStatus.CONTENT_TOO_LARGE)
+			.body(ApiProblems.of(HttpStatus.CONTENT_TOO_LARGE, ApiErrorCode.PAYLOAD_TOO_LARGE, ex.getMessage()));
 	}
 
 	@ExceptionHandler({ ObjectOptimisticLockingFailureException.class, OptimisticLockException.class })

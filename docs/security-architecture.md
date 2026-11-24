@@ -166,12 +166,18 @@ Isolation is enforced in layers, so a single bug does not leak data.
 ## 5. Input, file and resource protection
 
 - **Validation:** Bean Validation at the boundary, size limits on every text field and request, and pagination limits.
-- **Uploads (M2):**
-  - file type is checked by content (magic bytes plus a parser check), not by extension;
-  - size, page-count and resolution limits apply;
-  - encrypted and corrupt files are rejected;
-  - parser time and memory are bounded, with protection against decompression bombs;
-  - OCR runs in a separate container.
+- **Uploads (M2, slice 2b implemented):**
+  - the request thread never parses a PDF: it streams the body to disk (multipart parts are spooled from the first
+    byte), hashes it, and checks the `%PDF-` signature within the first 1024 bytes; the declared content type and file
+    name are ignored for this decision;
+  - limits: 50 MB per file (enforced while reading), 500 pages, 20 unfinished jobs and 2 GB of stored files per
+    integration (D-29);
+  - the worker opens the PDF with PDFBox from disk with a temp-file-only cache and a 60 s limit, and rejects encrypted
+    (including owner-password-only, D-27), corrupt, empty and over-long files; it re-verifies the stored file's
+    SHA-256 first;
+  - stored originals use keys built only from UUIDs, live outside the web root and are read-only; client file names
+    are metadata only, stripped of path parts, control, bidi and zero-width characters;
+  - OCR will run in a separate container (slice 2d).
 - **Rate limits and quotas** per integration and per user: uploads, OCR pages, embeddings, chat turns, tool calls (M2 onward; full quotas in M11).
 - **SQL injection:** parameterized queries only. The LLM never produces SQL.
 - **XSS:** the API returns JSON only, with `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY`. The review UI milestone adds a CSP and controlled embedding (`frame-ancestors`).
@@ -238,4 +244,20 @@ These events are audited, as append-only records with integration, principal, ac
 | JWKS: bounded cache (5 min), at most two re-fetches per 30 s for unknown key ids, size limit, no redirects, RSA ≥ 2048 bits, outage → 503 | `UserAssertionDecoderFactory`, `UserAssertionProperties` | `JwksRotationIntegrationTest`, `TrustConfigurationValidationTest` |
 | Concurrent duplicate creates return 409, not 500 | `saveAndFlush` in services | `KnowledgeBaseApiIntegrationTest` |
 
-**Not yet implemented (planned):** rate limiting and quotas (M2), `jti` replay cache for write operations (M2, with uploads), admin OIDC login (Q-02), audit read API.
+### Implemented in M2 slice 2b
+
+| Control | Where | Verified by |
+|---|---|---|
+| Uploads never parsed on request threads; type judged by content | `DocumentUploadService`, `LocalDocumentStorage` | `DocumentUploadIntegrationTest`, `LocalDocumentStorageTest` |
+| Encrypted, corrupt, empty and over-long PDFs rejected by the worker with stable codes | `PdfBoxInspector`, `ExtractDocumentJobHandler` | `PdfBoxInspectorTest`, `DocumentUploadIntegrationTest` |
+| Storage keys only from UUIDs, confined to the root; forged temp handles refused; originals read-only | `LocalDocumentStorage` | `LocalDocumentStorageTest` |
+| Documents, versions and jobs FORCE RLS; foreign, invisible and unknown ids give identical 404s | V6, `DocumentQueryService` | `DocumentIsolationIntegrationTest`, `RlsCoverageIntegrationTest` |
+| Per-integration quotas: unfinished jobs (429 + `Retry-After`) and stored bytes (413) | `DocumentUploadService` | `IngestionJobLifecycleIntegrationTest` |
+| Jobs re-validate the enqueuing key and integration; revoked key or archived KB cancels the job | `JobRunner`, `ExtractDocumentJobHandler` | `JobRunnerTest`, `IngestionJobLifecycleIntegrationTest` |
+| No double claims under concurrency; stale workers cannot overwrite results; fair share per integration | `claim_jobs`, `PostgresJobQueue` | `JobQueueIntegrationTest` |
+| Job context snapshots hold identifiers and scopes only, never secrets | `JobContextSnapshot` | `JobQueueIntegrationTest` |
+| Client file names cleaned of path parts, control, bidi and zero-width characters | `UntrustedText` | `UntrustedTextTest` |
+
+**Not yet implemented (planned):** general API rate limiting (per-integration upload quotas exist since M2), `jti`
+replay cache for user assertions on write operations (uploads accept assertions; open item from slice 2b), admin
+OIDC login (Q-02), audit read API.

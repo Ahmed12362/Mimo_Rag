@@ -59,7 +59,8 @@ Root package: `com.mimocodes.mimorag`.
 | `access` | Edge adapters: Spring Security filter chains, integration API-key authentication, user-assertion (JWT) verification, admin authentication. Produces `AccessContext`. The **only** module that knows about identity providers, JWT libraries or Spring Security. | M0 (baseline), M1 |
 | `integration` | Integrations (tenants), credential records (hashed), trust configuration (issuer, audience, JWKS URL, claim mapping), lifecycle. | M1 |
 | `knowledgebase` | KBs, ownership, KB policies (access rules, review rules, service-identity search opt-in). | M1 |
-| `ingestion` | Upload, file validation, original-file storage, extraction orchestration, `PdfTextExtractor`, `OcrProvider`, jobs. | M2 |
+| `ingestion` | Upload, file validation, original-file storage (`DocumentStorage`), PDF inspection (`PdfInspector`, PDFBox confined to `ingestion.infrastructure`), extraction orchestration; later `PdfTextExtractor`, `OcrProvider`. | M2 |
+| `jobs` | Generic PostgreSQL job queue (`JobQueue`, `JobLeaseStore`) and `JobRunner`: bounded worker pools per job kind, leases and heartbeats, credential re-validation, retries ([ADR-0011](adr/0011-postgresql-job-queue-without-outbox.md)). Modules plug in `JobHandler`s; `jobs` depends on none of them. | M2 |
 | `review` | Page review states, page revisions, submit validation, immutable approved snapshots. | M3 |
 | `indexing` | Normalization, chunking, `EmbeddingProvider`, `VectorStore`, ingestion runs, active-version switch. Reads **only** approved snapshots. | M4 |
 | `retrieval` | Query embedding, filtered retrieval, context assembly, `ChatModelProvider`, grounded answers, citations, abstention. | M5 |
@@ -89,6 +90,9 @@ infrastructure (JPA repositories, HTTP clients, provider adapters) ──impleme
 9. JOSE/JWT libraries (`com.nimbusds`, `spring-security-oauth2`) are used only inside `access`.
 10. No field injection; no `java.util.logging`.
 11. Only `access`, `shared.access`, `shared.persistence` and the job runner (`jobs`) may bind an access context (`AccessContextHolder.set/callAs/clear`). Binding decides which tenant the database sees.
+12. The PDF library (`org.apache.pdfbox`, `org.apache.fontbox`) is used only inside `ingestion.infrastructure`.
+13. `jobs` depends on no business module (only `integration.application`, for credential re-validation).
+14. `ingestion` uses `knowledgebase` only through its application layer.
 
 Rules that target modules not yet implemented use `allowEmptyShould(true)`, so they start protecting each module the moment its first class appears.
 
@@ -138,14 +142,22 @@ Rules that target modules not yet implemented use `allowEmptyShould(true)`, so t
   - `/actuator/health/liveness` excludes the database, so the JVM is not restarted for a database outage.
 - **Exposure:** only `health` and `info` are exposed over HTTP. Metrics and Prometheus come with per-stage timers from M2, behind authentication.
 
-## 9. Asynchronous processing (planned, M2)
+## 9. Asynchronous processing (implemented in M2 slice 2b)
 
-Proposed in [ADR-0007](adr/0007-async-jobs-and-transactional-outbox.md), to be confirmed in M2:
+Decided in [ADR-0011](adr/0011-postgresql-job-queue-without-outbox.md) (supersedes ADR-0007): one `job` table, **no
+outbox and no broker**. A job is inserted in the same transaction as the business change that needs it.
 
-- **Jobs:** a PostgreSQL-backed job table claimed with `FOR UPDATE SKIP LOCKED`, worked by bounded worker pools (separate pools for OCR, embedding and LLM calls).
-- **Events:** a transactional outbox carries domain events between modules (`ExtractionCompleted`, `SnapshotApproved`, …).
-- **Retries:** bounded, with backoff and recorded failure reasons; idempotency keys prevent duplicate work.
-- **No message broker** in the MVP.
+- **Claiming:** `claim_jobs(...)` (SECURITY DEFINER, `FOR UPDATE SKIP LOCKED`) is the only cross-tenant query. It also
+  reclaims jobs whose lease expired, and caps running jobs per integration and kind, so one tenant cannot occupy
+  every worker.
+- **Execution:** `JobRunner` keeps one bounded pool per job kind (extraction: 2) and claims only as many jobs as there
+  are idle workers. Request threads never run jobs. Before each run it re-validates the enqueuing API key and
+  integration; the job runs under the stored identity with the key's *current* scopes (never more than at enqueue).
+- **Leases:** 2 minutes, extended by a heartbeat every 30 s. Updates are accepted only from the lease holder.
+- **Outcomes:** success; transient failure (retried up to 3 attempts, about 30 s, 2 min, 8 min with jitter);
+  permanent failure; or cancellation (identity or Knowledge Base no longer valid). The job's final state and the owning
+  module's reaction commit in one transaction.
+- **Idempotency:** handlers tolerate re-runs; uploads use `Idempotency-Key` and content hashes.
 
 ## 10. Performance strategy
 

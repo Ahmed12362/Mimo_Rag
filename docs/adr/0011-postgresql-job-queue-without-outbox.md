@@ -45,6 +45,18 @@ Business code depends on a `JobQueue` interface (`enqueue` joins the caller's tr
 RabbitMQ/Kafka means a new `JobQueue` implementation; **that** is the point where a transactional outbox becomes
 necessary (database change + broker publish), and it would be introduced then, without changing handlers.
 
+## Implementation notes (M2 slice 2b)
+
+- `claim_jobs` caps running jobs per integration **including jobs claimed in the same call** (window function), and
+  repeats the runnable conditions inside the locking query: PostgreSQL re-checks a concurrently changed row only
+  against the locking query's own conditions, so without them a job could be claimed twice
+  (`JobQueueIntegrationTest.concurrentWorkersNeverClaimTheSameJob`: 6 workers, 100 jobs, repeated 5 times).
+- The FORCEd `job` table has an extra policy for the schema owner, reachable only through the SECURITY DEFINER
+  functions (the application never connects as the owner).
+- A job's final failure or cancellation and the owning module's reaction (`JobHandler.onFinalFailure`) commit in one
+  transaction; if the reaction fails, the job outcome is recorded alone.
+- Handlers can raise `JobFailure.revalidation(code)` to cancel (e.g. Knowledge Base archived) instead of failing.
+
 ## Consequences
 
 - No extra infrastructure; job state changes are transactionally consistent with business data.

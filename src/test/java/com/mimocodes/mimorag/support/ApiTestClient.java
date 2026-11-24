@@ -1,5 +1,7 @@
 package com.mimocodes.mimorag.support;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -11,11 +13,16 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.RequestBuilder;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.test.web.servlet.request.MockMultipartHttpServletRequestBuilder;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -116,6 +123,43 @@ public final class ApiTestClient {
 			.content(toJson(Map.of("grants", grants)))).andExpect(status().isOk());
 	}
 
+	public void archiveKnowledgeBase(String apiKey, UUID kbId) throws Exception {
+		JsonNode kb = readJson(withKey(get("/api/v1/knowledge-bases/{id}", kbId), apiKey), 200);
+		perform(withKey(patch("/api/v1/knowledge-bases/{id}", kbId), apiKey)
+			.content(toJson(Map.of("version", kb.get("version").asLong(), "status", "ARCHIVED"))))
+			.andExpect(status().isOk());
+	}
+
+	// ---- documents ------------------------------------------------------------------------------------------
+
+	/** Multipart upload request (no JSON content type; the builder sets multipart/form-data). */
+	public MockMultipartHttpServletRequestBuilder upload(String apiKey, UUID kbId, String filename, byte[] content) {
+		return multipart("/api/v1/knowledge-bases/{id}/documents", kbId)
+			.file(new MockMultipartFile("file", filename, "application/pdf", content))
+			.header(API_KEY_HEADER, apiKey);
+	}
+
+	/** Uploads and expects 202; returns the response body. */
+	public JsonNode uploadAccepted(String apiKey, UUID kbId, byte[] content) throws Exception {
+		return readJson(upload(apiKey, kbId, "test.pdf", content), 202);
+	}
+
+	/** Polls an ingestion job until it reaches a final state, or fails the test after {@code timeout}. */
+	public JsonNode awaitJob(String apiKey, String jobId, Duration timeout) throws Exception {
+		Instant deadline = Instant.now().plus(timeout);
+		JsonNode job;
+		do {
+			job = readJson(withKey(get("/api/v1/ingestion-jobs/{id}", jobId), apiKey), 200);
+			String status = job.get("status").asString();
+			if (status.equals("SUCCEEDED") || status.equals("FAILED") || status.equals("CANCELLED_REVALIDATION")) {
+				return job;
+			}
+			Thread.sleep(100);
+		}
+		while (Instant.now().isBefore(deadline));
+		throw new AssertionError("Job " + jobId + " did not finish in " + timeout + "; last state: " + job);
+	}
+
 	// ---- low-level ------------------------------------------------------------------------------------------
 
 	public MockHttpServletRequestBuilder admin(MockHttpServletRequestBuilder request) {
@@ -131,11 +175,11 @@ public final class ApiTestClient {
 		return withKey(request, apiKey).header(USER_ASSERTION_HEADER, assertion);
 	}
 
-	public ResultActions perform(MockHttpServletRequestBuilder request) throws Exception {
+	public ResultActions perform(RequestBuilder request) throws Exception {
 		return mockMvc.perform(request);
 	}
 
-	public JsonNode readJson(MockHttpServletRequestBuilder request, int expectedStatus) throws Exception {
+	public JsonNode readJson(RequestBuilder request, int expectedStatus) throws Exception {
 		String content = perform(request).andExpect(status().is(expectedStatus))
 			.andReturn()
 			.getResponse()

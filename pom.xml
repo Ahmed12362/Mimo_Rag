@@ -19,6 +19,7 @@
 		<!-- Versions not managed by the Spring Boot BOM. Stable releases only (no -M / -RC). -->
 		<springdoc.version>3.2.1</springdoc.version>
 		<archunit.version>1.5.1</archunit.version>
+		<pdfbox.version>3.0.7</pdfbox.version>
 	</properties>
 
 	<dependencies>
@@ -46,6 +47,13 @@
 		<dependency>
 			<groupId>org.springframework.security</groupId>
 			<artifactId>spring-security-oauth2-jose</artifactId>
+		</dependency>
+
+		<!-- PDF parsing; used only inside ingestion.infrastructure (ArchUnit-enforced). -->
+		<dependency>
+			<groupId>org.apache.pdfbox</groupId>
+			<artifactId>pdfbox</artifactId>
+			<version>${pdfbox.version}</version>
 		</dependency>
 
 		<!-- Operations -->
@@ -117,6 +125,15 @@
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+			<!-- Stored originals are read-only by design; on Windows that attribute would otherwise block `mvn clean`
+			     from removing the integration-test storage under target/. -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-clean-plugin</artifactId>
+				<configuration>
+					<force>true</force>
+				</configuration>
 			</plugin>
 		</plugins>
 	</build>

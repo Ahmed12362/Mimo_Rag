@@ -80,6 +80,31 @@ User assertions are verified against the integration's trust configuration
 inline public keys. For manual testing, `src/test/java/.../devtools/DevAssertionTool` can generate a key pair and mint
 tokens (see `PROJECT_PROGRESS.md`, M1).
 
+## Upload documents (M2)
+
+Uploads return at once (`202`); a background job checks the PDF. A Postman collection with these steps is in
+[`docs/postman/`](docs/postman/).
+
+```bash
+# The integration's key needs DOCUMENT_UPLOAD (and DOCUMENT_REVIEW to read results)
+curl -X POST localhost:8080/api/v1/knowledge-bases/<kbId>/documents -H "X-Api-Key: mrk_..."   -H "Idempotency-Key: upload-2026-0001" -F "file=@policy.pdf;type=application/pdf" -F "title=HR Policies"
+# 202 {"outcome":"CREATED","documentId":"…","versionId":"…","jobId":"…","status":"UPLOADED"}
+# 200 {"outcome":"DUPLICATE","duplicateOf":"…"} when the same file is already in this Knowledge Base
+
+curl localhost:8080/api/v1/ingestion-jobs/<jobId> -H "X-Api-Key: mrk_..."          # status, errorCode, pageCount
+curl localhost:8080/api/v1/documents/<documentId> -H "X-Api-Key: mrk_..."          # metadata and versions
+curl localhost:8080/api/v1/knowledge-bases/<kbId>/documents -H "X-Api-Key: mrk_..."  # paginated list
+curl -X POST localhost:8080/api/v1/ingestion-jobs/<jobId>/retry -H "X-Api-Key: mrk_..." # failed/cancelled jobs
+```
+
+| Response | When |
+|---|---|
+| `415 UNSUPPORTED_MEDIA_TYPE` | The content is not a PDF (judged by its bytes, not the name or declared type) |
+| `413 PAYLOAD_TOO_LARGE` / `413 STORAGE_QUOTA_EXCEEDED` | Over 50 MB / over the integration's 2 GB of stored files |
+| `429 UPLOAD_QUEUE_FULL` + `Retry-After` | 20 documents of this integration are still waiting or being processed |
+| Job `FAILED` with `PDF_ENCRYPTED`, `PDF_CORRUPT`, `PDF_EMPTY`, `PDF_TOO_MANY_PAGES` | Found by the worker; not retryable |
+| Job `CANCELLED_REVALIDATION` | The uploading key was revoked or expired, or the Knowledge Base was archived, before processing; retryable |
+
 ## Test
 
 ```bash
@@ -98,6 +123,9 @@ All settings come from environment variables. In the `local` profile they can al
 | `MIMORAG_DB_APP_USER` / `MIMORAG_DB_OWNER_USER` | no | Role names (default `mimorag_app` / `mimorag_owner`) |
 | `MIMORAG_DB_POOL_SIZE` | no | Connection pool size (default 10) |
 | `MIMORAG_ADMIN_KEY_SHA256` | no | Hex SHA-256 of the platform-admin key. Empty disables the admin API. |
+| `MIMORAG_INGESTION_STORAGE_ROOT` | no | Where original files are stored (default `data/storage`, git-ignored). Use a folder outside the repository, e.g. `D:/mimorag-data`. |
+| `MIMORAG_INGESTION_MAX_FILE_SIZE`, `..._MAX_PAGES`, `..._MAX_UNFINISHED_JOBS_PER_INTEGRATION`, `..._STORAGE_QUOTA_PER_INTEGRATION` | no | Upload limits (defaults 50MB, 500, 20, 2GB; decision D-29) |
+| `MIMORAG_JOBS_ENABLED` | no | Run background workers on this instance (default `true`). Worker counts per job kind: `--mimorag.jobs.workers.extract-document=2` |
 | `MIMORAG_DB_PORT`, `POSTGRES_*` | local only | Docker Compose container settings |
 
 Never commit `.env` or real secrets.

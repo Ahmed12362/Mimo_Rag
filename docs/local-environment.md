@@ -51,7 +51,7 @@ autoMemoryReclaim=gradual   # return cached memory to Windows (verify on Windows
 
 | Setting | Value | Notes |
 |---|---|---|
-| `MIMORAG_STORAGE_ROOT` | `D:\mimorag-data` | Outside the repository and Docker; originals, artifacts, page cache |
+| `MIMORAG_INGESTION_STORAGE_ROOT` | `D:/mimorag-data` | Outside the repository and Docker; originals (since 2b), page cache (2e). Default `data/storage` (git-ignored). |
 | `MIMORAG_PAGE_CACHE_MAX_MB` | `1024` | Rendered page images; LRU eviction down to 80 % when exceeded; never counts toward tenant quotas |
 
 ## Disk budget (re-checked before every large download)

@@ -22,7 +22,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RlsCoverageIntegrationTest extends PostgresIntegrationTest {
 
 	/** Tenant content: RLS enabled AND forced, no admin exception. */
-	private static final Set<String> TENANT_CONTENT = Set.of("knowledge_base", "knowledge_base_role_grant");
+	private static final Set<String> TENANT_CONTENT = Set.of("knowledge_base", "knowledge_base_role_grant",
+			"document", "document_version", "job");
 
 	/**
 	 * Platform and credential metadata: RLS enabled but not forced, because SECURITY DEFINER authentication

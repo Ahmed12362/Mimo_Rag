@@ -18,7 +18,9 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 		"mimorag.security.trust.allow-insecure-jwks=true", "mimorag.security.trust.allow-inline-jwks=false",
 		// Short key-cache timings so JWKS rotation tests run in seconds.
 		"mimorag.security.assertion.jwks-cache-ttl=PT2S",
-		"mimorag.security.assertion.jwks-refresh-min-interval=PT1S" })
+		"mimorag.security.assertion.jwks-refresh-min-interval=PT1S",
+		// Uploaded test files stay inside the build directory; fast job polling keeps worker tests short.
+		"mimorag.ingestion.storage-root=target/test-storage", "mimorag.jobs.poll-interval=PT0.2S" })
 @AutoConfigureMockMvc
 public abstract class PostgresIntegrationTest {
 

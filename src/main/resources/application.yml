@@ -77,6 +77,10 @@ springdoc:
     enabled: false
 
 mimorag:
+  ingestion:
+    # Original files and the upload spool. Keep it outside the repository, e.g. D:/mimorag-data (decision D-23).
+    # Other ingestion and job limits have code defaults; see README "Configuration".
+    storage-root: ${MIMORAG_INGESTION_STORAGE_ROOT:data/storage}
   security:
     public-api-docs: false
     # Hex SHA-256 of the bootstrap platform-admin key. Empty = admin plane disabled (every admin call gets 401).

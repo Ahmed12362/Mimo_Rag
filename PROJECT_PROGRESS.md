@@ -7,7 +7,122 @@ Milestone scope and decisions: [docs/roadmap.md](docs/roadmap.md). This file rec
 | M0 — Architecture baseline | ✅ Done (commit `d963e59`) | `chore/m0-architecture-baseline` → `main` |
 | M1 — Integrations, KBs, identity, RLS | ✅ Done (commit `5db21e9`) | `main` |
 | M1 hardening — key lifecycle, KB-restricted keys, review fixes | ✅ Done (commits `fa683c7`, `87c8105`) | `fix/m1-hardening` → `main` |
-| M2 – M11 | Not started | — |
+| M2 slice 2a — OCR benchmark | ✅ Done (commit `4f897f1`); report: [docs/benchmarks/ocr-benchmark-2a.md](docs/benchmarks/ocr-benchmark-2a.md) | `feature/m2-pdf-upload-extraction` |
+| M2 slice 2b — upload, storage, job queue | ✅ Done (committed on the feature branch) | `feature/m2-pdf-upload-extraction` |
+| M2 slices 2c–2e, M3 – M11 | Not started | — |
+
+---
+
+## M2 slice 2b — upload, storage and job queue
+
+**Date:** 2026-11-24 · **Decisions:** D-26 to D-29, D-35, D-36 · ADR-0011 (implementation notes) · **Migration:** V6
+
+### Delivered
+
+- **Database (V6):** `document`, `document_version` and `job` (all FORCE RLS, composite tenant foreign keys); worker
+  functions `claim_jobs` (SKIP LOCKED, lease reclaim, per-integration fairness), `extend_job_lease`,
+  `fail_abandoned_jobs`; the runtime role cannot delete jobs.
+- **`jobs` module (new):** `JobQueue` (enqueue joins the caller's transaction), `JobLeaseStore`, `JobRunner`
+  (bounded pool per job kind, heartbeats, credential re-validation, scope narrowing, retries with backoff,
+  cancellation, crash sweep, graceful shutdown), `JobHandler`, `JobFailure` (permanent, transient, revalidation).
+- **`ingestion` module (new):**
+  - `POST /api/v1/knowledge-bases/{kbId}/documents` (202 / 200 duplicate);
+  - `GET /api/v1/knowledge-bases/{kbId}/documents`, `GET /api/v1/documents/{id}`;
+  - `GET /api/v1/ingestion-jobs/{id}`, `POST /api/v1/ingestion-jobs/{id}/retry`;
+  - local storage (UUID keys, atomic move, read-only originals, stale temp cleanup);
+  - PDFBox inspector (encrypted, corrupt, empty, page limit, 60 s time limit, temp-file-only cache);
+  - `Idempotency-Key`, duplicate detection (D-28), quotas (D-29), file name sanitising, audit events.
+- **Shared:** error codes `UPLOAD_QUEUE_FULL` (429 + `Retry-After`) and `STORAGE_QUOTA_EXCEEDED` (413); 415 for
+  content that is not a PDF.
+- **Integration:** `ApiKeyAuthenticator.revalidate(keyId)`, so jobs re-check credentials with the same rules.
+- **Configuration:** typed `mimorag.ingestion.*` and `mimorag.jobs.*` settings with defaults; multipart limits are
+  derived from them (spooled to disk from the first byte); `MIMORAG_INGESTION_STORAGE_ROOT` in `application.yml` and
+  `.env.example`; Maven clean forced so read-only test files do not block `mvn clean` on Windows.
+- **Docs:** README (upload API, settings), architecture (module map, ArchUnit rules 12–14, async processing),
+  security architecture (implemented controls), ADR-0011 implementation notes, local environment, roadmap (status,
+  D-26 to D-36, Q-04, Q-07), Postman collection [docs/postman/](docs/postman/).
+
+### Acceptance criteria
+
+| # | Criterion | Result | Evidence |
+|---|---|---|---|
+| 1 | Valid PDF → 202 with ids; job reaches `VALIDATED` with the page count; 1 MB p95 < 1 s | ✅ | `DocumentUploadIntegrationTest`; HTTP: Arabic PDF and 300-page PDF validated; 1 MB upload p95 90 ms |
+| 2 | Non-blocking: response before validation; GET p95 within 2× baseline under 5 × 43 MB uploads; heap independent of file size | ✅ | Upload returns `UPLOADED`/202 before the job runs; GET p95 12.4 ms under load vs 14.3 ms idle; heap max 71 MB (43 MB uploads) vs 75 MB (20 KB uploads) |
+| 3 | Rejections with clear codes | ✅ | 415 not a PDF (also when named `.pdf`); 413 over 50 MB; empty file → **400** (see deviations); worker codes `PDF_ENCRYPTED` (incl. owner-only), `PDF_CORRUPT`, `PDF_EMPTY`, `PDF_TOO_MANY_PAGES` |
+| 4 | Duplicates and idempotency, including concurrent | ✅ | Same file → 200 `DUPLICATE`; 4 concurrent identical uploads → 1 document; key replay → `REPLAYED`; key reuse with other content → 409 |
+| 5 | Queue: no double claims, lease reclaim, retries, revalidation cancel, safe retry | ✅ | `JobQueueIntegrationTest` (10), `JobRunnerTest` (13), `IngestionJobLifecycleIntegrationTest` (revoked key, archived KB) |
+| 6 | Quotas: 21st unfinished job → 429 + `Retry-After`; storage → 413 | ✅ | `IngestionJobLifecycleIntegrationTest` |
+| 7 | Tenant isolation, KB-restricted keys, RLS | ✅ | `DocumentIsolationIntegrationTest` (identical 404 bodies), `RlsCoverageIntegrationTest`, no rows without tenant context |
+| 8 | Storage safety | ✅ | `LocalDocumentStorageTest` (traversal, forged handles, read-only, cleanup); temp and spool folders empty after the HTTP run |
+| 9 | Quality gates | ✅ | See below |
+
+### Automated tests — `./mvnw clean verify` → **BUILD SUCCESS, 267 tests, 0 failures** (2a end: 187)
+
+New: `DocumentUploadIntegrationTest` (15), `DocumentIsolationIntegrationTest` (5),
+`IngestionJobLifecycleIntegrationTest` (4), `JobQueueIntegrationTest` (10, the concurrency test repeated 5 times with
+6 workers and 100 jobs), `JobRunnerTest` (13), `JobPropertiesBindingTest` (3), `PdfBoxInspectorTest` (8),
+`LocalDocumentStorageTest` (9), `UntrustedTextTest` (6); `ArchitectureRulesTest` +3 rules; RLS classification of the
+new tables. The full suite was run three times: stable.
+
+**Defects found by these tests and fixed before commit:** (1) a job could be claimed twice under concurrency (see
+ADR-0011 notes); (2) one claim call could give one tenant every free worker; (3) a failed job could briefly show its
+document as still validating (final state and reaction now commit together).
+
+### Real HTTP checks (local profile, Docker Compose PostgreSQL; V6 applied to the existing M1 database)
+
+```text
+POST Arabic PDF (benchmark corpus, title in Arabic)    → 202 CREATED in 0.20 s → job SUCCEEDED, VALIDATED, pages=1
+POST 300-page PDF                                      → 202 in 0.06 s → SUCCEEDED, pages=300
+POST 43 MB PDF                                         → 202 in 1.37 s → SUCCEEDED, pages=1
+POST 501-page PDF                                      → job FAILED PDF_TOO_MANY_PAGES (attempts=1, retryable=false)
+POST encrypted PDF                                     → job FAILED PDF_ENCRYPTED; POST …/retry → 409
+POST HTML file named .pdf                              → 415 UNSUPPORTED_MEDIA_TYPE
+POST same Arabic PDF again                             → 200 DUPLICATE duplicateOf=<first document>
+POST with Idempotency-Key twice / then other file      → 202 REPLAYED (same job) / 409
+Other integration: GET document, GET job, list KB, upload into KB → 404, 404, 404, 404
+Arabic file name and title sent as UTF-8 multipart    → stored and returned unchanged
+```
+
+### Performance (local, sequential unless stated)
+
+| Measurement | p50 | p95 | Note |
+|---|---|---|---|
+| `GET /api/v1/knowledge-bases/{id}`, idle | 11.9 ms | 14.3 ms | M1: 13.1 / 16.0 ms |
+| Same, during 5 concurrent 43 MB uploads and their jobs | 9.2 ms | 12.4 ms | n = 1000; max 66 ms |
+| Upload 20 KB | 58.7 ms | 67.4 ms | |
+| Upload 1 MB | 69.0 ms | 90.1 ms | |
+| Upload 43 MB | 1.01 s | 1.56 s | |
+| Upload 43 MB, 5 concurrent | 9.1 s | 9.7 s | Disk-bound (each byte is written twice, see debt) |
+| Job queued → validated, 43 MB, 5 concurrent | 1.43 s | 2.42 s | Includes SHA-256 re-check and PDFBox open |
+| Heap used (jstat), 20 KB vs 43 MB uploads | 75 MB vs 71 MB max | | Does not grow with file size |
+| Startup (V6 applied) | 13.6 s | | M1: 12.4 s |
+
+### Implementation review
+
+1. **Clean Code / SOLID:**
+   - Small, single-purpose classes: upload use case, query service, job handler, storage, inspector, runner.
+   - Interfaces exist only at real variation points (`DocumentStorage`, `PdfInspector`, `JobQueue`/`JobLeaseStore`,
+     `JobHandler`).
+   - The domain enforces state transitions (`DocumentVersion`).
+2. **Intentional deviations:**
+   - An empty file returns **400** `VALIDATION_FAILED`, not 413 as written in the plan's criterion 3; 413 means "too
+     large".
+   - Job timestamps use the database clock (all workers agree on leases); other tables use the application clock.
+   - A small `application.yml` addition (`mimorag.ingestion.storage-root` placeholder), so `.env` can set it.
+3. **Module dependencies:** `ingestion → knowledgebase.application, jobs.application, shared`;
+   `jobs → integration.application, shared`. No cycles (ArchUnit).
+4. **Tests:** 80 new; commands and results above.
+5. **Technical debt / follow-ups:**
+   - Each upload is written to disk twice (servlet multipart spool, then our hashing copy). Streaming the part
+     directly would halve disk I/O for large files.
+   - A PDFBox parse that hits the 60 s limit may keep its thread running in the background until it finishes.
+   - The queue quota is checked before the insert, so parallel uploads can exceed it by a few.
+   - Demo uploads from the HTTP check (about 476 MB) remain in `D:\mimorag-data` and the local database.
+
+### Open items
+
+- **Q-07 `jti` replay protection** for user assertions on write operations (uploads accept assertions): decided
+  2026-11-24 to add it as a small slice **before M3** (review edits).
 
 ---
 

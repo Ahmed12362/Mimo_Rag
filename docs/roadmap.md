@@ -8,7 +8,7 @@
 
 ## 0. Status, decisions and open questions
 
-_Last updated: 2026-11-23._
+_Last updated: 2026-11-24._
 
 ### 0.1 Milestone status
 
@@ -16,8 +16,8 @@ _Last updated: 2026-11-23._
 |---|---|
 | M0 — Repository inspection and architecture baseline | ✅ Done (committed `d963e59`; `main` created at this commit) |
 | M1 — Integration and Knowledge Base foundation (identity, RLS) | ✅ Done (`5db21e9` on `main`) |
-| M1 hardening — key lifecycle, KB-restricted keys, review fixes | **Implemented on `fix/m1-hardening`. Awaiting approval and commit.** |
-| M2 — PDF upload and extraction | Not started (reassess Docker disk usage first) |
+| M1 hardening — key lifecycle, KB-restricted keys, review fixes | ✅ Done (`fa683c7`, `87c8105` on `main`) |
+| M2 — PDF upload and extraction | **In progress** on `feature/m2-pdf-upload-extraction`: 2a OCR benchmark ✅ (`4f897f1`), 2b upload and job queue ✅ done, 2c–2e not started |
 | M3 — Review, submit and approved snapshot (API-first) | Not started |
 | M4 — Chunking, embeddings, indexing | Not started |
 | M4b — Embeddable review UI | Not started (after M4) |
@@ -54,6 +54,17 @@ Detailed acceptance results: [`PROJECT_PROGRESS.md`](../PROJECT_PROGRESS.md).
 | D-23 | Local document storage behind a `DocumentStorage` interface (`LocalDocumentStorage`, root `D:\mimorag-data`); S3-compatible later without pipeline changes | M2 plan |
 | D-24 | Fully local AI stack during development (PaddleOCR, bge-m3, Qwen3-4B via Ollama on Windows, optional bge-reranker-v2-m3); no hosted inference APIs | [local-environment.md](local-environment.md) |
 | D-25 | WSL2 memory cap 6 GB (temporary development setting) | [local-environment.md](local-environment.md) |
+| D-26 | PDF structure is checked by the worker, never on the request thread; uploads return 202 and failures appear on the job (`PDF_ENCRYPTED`, `PDF_CORRUPT`, `PDF_EMPTY`, `PDF_TOO_MANY_PAGES`) | M2 plan, slice 2b |
+| D-27 | All encrypted PDFs are rejected in M2, including owner-password-only files | M2 plan, slice 2b |
+| D-28 | The same file (SHA-256) uploaded again to the same Knowledge Base returns the existing document (200, `duplicateOf`) | M2 plan, slice 2b |
+| D-29 | Defaults: 50 MB per file, 500 pages, 20 unfinished jobs and 2 GB of stored files per integration. Queue full → 429 `UPLOAD_QUEUE_FULL` + `Retry-After`; storage quota → 413 `STORAGE_QUOTA_EXCEEDED` | M2 plan, slice 2b |
+| D-30 | Preferred OCR candidate: **gated hybrid** — PaddleOCR 3.7.0 on PaddlePaddle 3.2.2, `PP-OCRv5_mobile_det` (detection input ≤ 1600 px), `arabic_PP-OCRv5_mobile_rec` at 300 DPI; English-model gate, then Tesseract on flagged Arabic lines; recovered Latin/digit tokens are only **inserted**, Arabic OCR text is never replaced; unresolved tokens are flagged for review | [ocr-benchmark-2a.md](benchmarks/ocr-benchmark-2a.md) |
+| D-31 | The OCR service lives in this repository (`ocr-service/`, slice 2d) and stays independently deployable | M2 plan |
+| D-32 | Orientation: classifiers only for pages that appear rotated (never on every page); validated in slice 2d before production use | [ocr-benchmark-2a.md](benchmarks/ocr-benchmark-2a.md) §9 |
+| D-33 | OCR workers: start with 1 worker × 4 threads; compare with 2 × 2 (throughput, memory, CPU, concurrent uploads) before finalising | [ocr-benchmark-2a.md](benchmarks/ocr-benchmark-2a.md) §9 |
+| D-34 | Human review and approval are mandatory between OCR and any RAG processing; originals and OCR output are preserved and corrections tracked | [ocr-benchmark-2a.md](benchmarks/ocr-benchmark-2a.md) §7.4, ADR-0006 |
+| D-35 | Uploading a new version of an existing document is deferred to M3 (re-review and snapshots); 2b creates new documents only | M2 plan, slice 2b |
+| D-36 | Job retries: 3 attempts for transient failures, backoff about 30 s, 2 min, 8 min with jitter; permanent failures are not retried; cancelled jobs can be requeued | M2 plan, slice 2b; ADR-0011 |
 
 ### 0.3 Git workflow
 
@@ -68,7 +79,8 @@ Detailed acceptance results: [`PROJECT_PROGRESS.md`](../PROJECT_PROGRESS.md).
 | Q-01 | Can each connected system (HRIS, CRM, ERP) issue RS256/ES256 user assertions and publish a JWKS endpoint? Which issuer and audience values will they use? (The verifier is ready since M1.) | Before user-scoped production use |
 | Q-02 | Long-term admin identity: OIDC through Keycloak or the company identity provider? | Before production |
 | ~~Q-03~~ | ✅ Decided: PostgreSQL job queue, no broker, no outbox table (D-10) | — |
-| Q-04 | Docker storage location and disk budget for PaddleOCR image, models and page-image cache | Start of M2 |
+| Q-04 | Docker storage location and disk budget for PaddleOCR image, models and page-image cache. **Partly answered (2026-11-24):** benchmark image 3.5 GB on C:; uploads on D: (`MIMORAG_INGESTION_STORAGE_ROOT`). C: has about 5 GB free until Docker's disk is compacted (owner action before slice 2d). | Slice 2d |
+| Q-07 | Replay protection (`jti` cache) for user assertions on write operations. **Decided (2026-11-24):** a small slice before M3 (review edits); uploads meanwhile rely on short token lifetimes, `Idempotency-Key` and duplicate detection. | Before M3 |
 | Q-05 | Is time-boxed, audited platform support access to tenant content ever needed? | Before production |
 | ~~Q-06~~ | ✅ Decided: mandatory expiry, 90-day default, 365-day maximum (D-21) | — |
 

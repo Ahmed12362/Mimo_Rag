@@ -98,6 +98,16 @@ public class ApiKeyAuthenticator {
 		return result;
 	}
 
+	/**
+	 * Re-checks a key that authenticated earlier (e.g. before a background job runs), with the same rules as
+	 * {@link #authenticate} except the secret, which is not available. Neither audited nor recorded as a key use.
+	 */
+	public Result revalidate(String keyId) {
+		return lookup.findByKeyId(keyId)
+			.map(stored -> evaluate(stored, keyId, true, clock.instant()))
+			.orElseGet(() -> new Rejected(RejectionReason.UNKNOWN_KEY, keyId));
+	}
+
 	private void recordUseThrottled(String keyId, Instant now) {
 		Instant last = lastRecordedUse.get(keyId);
 		if (last != null && last.plus(USE_RECORDING_INTERVAL).isAfter(now)) {

@@ -20,6 +20,10 @@ public enum ApiErrorCode {
 	PAYLOAD_TOO_LARGE,
 	CONFLICT,
 	RATE_LIMITED,
+	/** The integration has too many unfinished ingestion jobs; retry after the {@code Retry-After} delay. */
+	UPLOAD_QUEUE_FULL,
+	/** Storing this upload would exceed the integration's storage quota. */
+	STORAGE_QUOTA_EXCEEDED,
 	SERVICE_UNAVAILABLE,
 	INTERNAL_ERROR;
 
