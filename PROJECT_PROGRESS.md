@@ -24,7 +24,7 @@ Milestone scope and decisions: [docs/roadmap.md](docs/roadmap.md). This file rec
 | **M6** Tenant-wide keys only | Optional `knowledgeBaseIds` restriction (composite tenant FK), enforced for services and relayed users. Restricted keys cannot create KBs or create broader keys. |
 | **M1** Transaction-manager edge cases | Failure applying tenant settings rolls back and releases all thread-bound resources. Switching context inside an active transaction is rejected. |
 | **M2** Public context binding | ArchUnit: only `access`, `shared.access`, `shared.persistence` and `jobs` may bind an access context. |
-| **M5 / L3** JWKS robustness | Explicit 5 min cache and at most one re-fetch per 30 s for unknown key ids (Nimbus `JWKSourceBuilder`); 50 KB size limit; no redirects; RSA ≥ 2048 bits (remote and inline); unreachable JWKS → 503. |
+| **M5 / L3** JWKS robustness | Explicit 5 min cache and at most two re-fetches per 30 s for unknown key ids (Nimbus allows two per interval) (Nimbus `JWKSourceBuilder`); 50 KB size limit; no redirects; RSA ≥ 2048 bits (remote and inline); unreachable JWKS → 503. |
 | **M7** Relayed user not attributable to a key | `AccessContext.credential` carries the key; `audit_event.api_key_id` on every row. |
 | **M8** No RLS guard for new tables | `RlsCoverageIntegrationTest`: every table must be classified; tenant tables must FORCE RLS; every RLS table needs a policy. |
 | **L1** Race → 500 | `saveAndFlush` inside `try` for integration, KB, grants and key creation → 409. |

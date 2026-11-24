@@ -87,7 +87,7 @@ mimorag:
     assertion:
       # A key removed from an integration's JWKS stays trusted at most this long.
       jwks-cache-ttl: PT5M
-      # At most one re-fetch per interval when a token names an unknown key id.
+      # At most two re-fetches per interval when tokens name unknown key ids (Nimbus rate limiter).
       jwks-refresh-min-interval: PT30S
       jwks-connect-timeout: PT2S
       jwks-read-timeout: PT3S

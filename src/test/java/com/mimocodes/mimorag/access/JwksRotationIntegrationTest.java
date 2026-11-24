@@ -95,8 +95,12 @@ class JwksRotationIntegrationTest extends PostgresIntegrationTest {
 		}
 		long elapsedSeconds = Duration.between(start, Instant.now()).toSeconds();
 
-		// At most one re-fetch per 1 s interval (test setting), plus one for a cache expiry during the burst.
-		assertThat(JwksTestServer.instance().fetchCount(code) - before).isLessThanOrEqualTo((int) elapsedSeconds + 2);
+		// Nimbus RateLimitedJWKSetSource allows two fetches per interval (1 s in tests). The burst touches at most
+		// elapsedSeconds + 1 new windows, plus up to one fetch left over from the window opened before the burst
+		// and one for a cache expiry. Without rate limiting, the 20 forged tokens would cause 20 fetches.
+		int bound = 2 * ((int) elapsedSeconds + 1) + 2;
+		assertThat(JwksTestServer.instance().fetchCount(code) - before).isLessThanOrEqualTo(bound)
+			.isLessThan(forged.size());
 	}
 
 	@Test

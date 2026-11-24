@@ -42,8 +42,8 @@ import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
  * <li>signature algorithms restricted to the configured subset of RS256/ES256 ({@code none} and HS* never accepted);
  * <li>keys only from that integration's JWKS (HTTPS endpoint, or inline keys in development); RSA keys below the
  * configured minimum size are ignored;</li>
- * <li>remote keys are cached for a bounded time; an unknown {@code kid} triggers at most one re-fetch per
- * configured interval; fetches have timeouts and a size limit and never follow redirects;</li>
+ * <li>remote keys are cached for a bounded time; re-fetches triggered by an unknown {@code kid} are
+ * rate-limited to at most two per configured interval (Nimbus {@code RateLimitedJWKSetSource}); fetches have timeouts and a size limit and never follow redirects;</li>
  * <li>{@code iss} and {@code aud} must match exactly; {@code exp}, {@code iat} and the user-id claim are mandatory;
  * {@code nbf} honoured; bounded clock skew; total token lifetime capped.</li>
  * </ul>

@@ -235,7 +235,7 @@ These events are audited, as append-only records with integration, principal, ac
 | Only `access`, `shared.persistence` and the job runner may bind an access context | ArchUnit | `ArchitectureRulesTest` |
 | Every table classified; tenant tables FORCE RLS; every RLS table has policies | Database guard | `RlsCoverageIntegrationTest` |
 | Audit rows name the authenticating (or relaying) API key | `JdbcAuditRecorder`, `audit_event.api_key_id` | `UserAssertionIntegrationTest`, `BootstrapKeyRotationIntegrationTest` |
-| JWKS: bounded cache (5 min), at most one re-fetch per 30 s for unknown key ids, size limit, no redirects, RSA ≥ 2048 bits, outage → 503 | `UserAssertionDecoderFactory`, `UserAssertionProperties` | `JwksRotationIntegrationTest`, `TrustConfigurationValidationTest` |
+| JWKS: bounded cache (5 min), at most two re-fetches per 30 s for unknown key ids, size limit, no redirects, RSA ≥ 2048 bits, outage → 503 | `UserAssertionDecoderFactory`, `UserAssertionProperties` | `JwksRotationIntegrationTest`, `TrustConfigurationValidationTest` |
 | Concurrent duplicate creates return 409, not 500 | `saveAndFlush` in services | `KnowledgeBaseApiIntegrationTest` |
 
 **Not yet implemented (planned):** rate limiting and quotas (M2), `jti` replay cache for write operations (M2, with uploads), admin OIDC login (Q-02), audit read API.
