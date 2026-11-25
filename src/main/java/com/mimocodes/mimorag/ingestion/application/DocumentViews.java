@@ -2,13 +2,11 @@ package com.mimocodes.mimorag.ingestion.application;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 import com.mimocodes.mimorag.ingestion.domain.Document;
 import com.mimocodes.mimorag.ingestion.domain.DocumentVersion;
 import com.mimocodes.mimorag.ingestion.domain.DocumentVersionStatus;
-import com.mimocodes.mimorag.ingestion.domain.ExtractionRun;
 import com.mimocodes.mimorag.jobs.application.JobQueue.JobView;
 import com.mimocodes.mimorag.jobs.application.JobStatus;
 
@@ -20,12 +18,12 @@ public final class DocumentViews {
 
 	public record VersionView(UUID id, int versionNumber, DocumentVersionStatus status, String failureCode,
 			String sha256, long sizeBytes, String contentType, Integer pageCount, UUID jobId, Instant uploadedAt,
-			String uploadedBy, Instant validatedAt) {
+			String uploadedBy, Instant validatedAt, UUID ocrJobId) {
 
 		static VersionView of(DocumentVersion v) {
 			return new VersionView(v.getId(), v.getVersionNumber(), v.getStatus(), v.getFailureCode(), v.getSha256(),
 					v.getSizeBytes(), v.getContentType(), v.getPageCount(), v.getExtractionJobId(), v.getUploadedAt(),
-					v.getUploadedBy(), v.getValidatedAt());
+					v.getUploadedBy(), v.getValidatedAt(), v.getOcrJobId());
 		}
 
 	}
@@ -71,25 +69,29 @@ public final class DocumentViews {
 
 	}
 
-	/** Status of an ingestion job, linked to the document version it processes. */
+	/**
+	 * Status of an ingestion job, linked to the document version it processes.
+	 *
+	 * @param nextJobId the job that continues this one's work ({@code OCR_DOCUMENT} after extraction), if any
+	 */
 	public record IngestionJobView(UUID id, String kind, JobStatus status, int attempts, int maxAttempts,
 			String errorCode, boolean retryable, UUID knowledgeBaseId, UUID documentId, UUID versionId,
 			DocumentVersionStatus versionStatus, Integer pageCount, Progress progress, Instant createdAt,
-			Instant startedAt, Instant finishedAt, Instant nextAttemptAt) {
+			Instant startedAt, Instant finishedAt, Instant nextAttemptAt, UUID nextJobId) {
 
-		/** Pages extracted so far; {@code null} before extraction starts. */
+		/** Pages processed so far by this job (extracted or OCR'd); {@code null} before the job starts. */
 		public record Progress(int pagesDone, int pagesTotal) {
 		}
 
-		static IngestionJobView of(JobView job, DocumentVersion version,
-				Optional<ExtractionRun> run) {
+		static IngestionJobView of(JobView job, DocumentVersion version, Progress progress) {
 			return new IngestionJobView(job.id(), job.kind(), job.status(), job.attempts(), job.maxAttempts(),
 					job.errorCode(), canRetry(job),
 					version.getKnowledgeBaseId(), version.getDocumentId(), version.getId(), version.getStatus(),
 					version.getPageCount(),
-					run.map(r -> new Progress(r.getPagesDone(), r.getPagesTotal())).orElse(null), job.createdAt(),
+					progress, job.createdAt(),
 					job.startedAt(), job.finishedAt(),
-					job.status() == JobStatus.RETRY_SCHEDULED ? job.runAfter() : null);
+					job.status() == JobStatus.RETRY_SCHEDULED ? job.runAfter() : null,
+					job.id().equals(version.getExtractionJobId()) ? version.getOcrJobId() : null);
 		}
 
 		/** Whether {@code POST /ingestion-jobs/{id}/retry} can requeue the job now. */

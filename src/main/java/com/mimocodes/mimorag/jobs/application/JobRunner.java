@@ -161,7 +161,7 @@ public class JobRunner implements SmartLifecycle {
 		List<ClaimedJob> claimed;
 		try {
 			claimed = store.claim(List.of(kind), idle, workerId, properties.lease(),
-					properties.perIntegrationConcurrency());
+					properties.perIntegrationConcurrencyFor(kind));
 		}
 		catch (RuntimeException ex) {
 			log.warn("Claiming {} jobs failed; will retry on the next poll", kind, ex);

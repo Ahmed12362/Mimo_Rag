@@ -63,6 +63,8 @@ public class DocumentVersion {
 	@Column(nullable = false, updatable = false)
 	private UUID extractionJobId;
 
+	private UUID ocrJobId;
+
 	@Column(nullable = false, updatable = false)
 	private Instant uploadedAt;
 
@@ -147,6 +149,39 @@ public class DocumentVersion {
 		this.updatedAt = now;
 	}
 
+	/** Links the OCR job that will process the pages needing OCR (set once, when extraction finishes). */
+	public void assignOcrJob(UUID jobId, Instant now) {
+		requireStatus(DocumentVersionStatus.AWAITING_OCR);
+		if (ocrJobId != null && !ocrJobId.equals(jobId)) {
+			throw new IllegalStateException("Version " + id + " already has an OCR job");
+		}
+		this.ocrJobId = Objects.requireNonNull(jobId, "jobId");
+		this.updatedAt = now;
+	}
+
+	public void startOcr(Instant now) {
+		requireStatus(DocumentVersionStatus.AWAITING_OCR, DocumentVersionStatus.OCR_RUNNING);
+		this.status = DocumentVersionStatus.OCR_RUNNING;
+		this.updatedAt = now;
+	}
+
+	public void finishOcr(Instant now) {
+		requireStatus(DocumentVersionStatus.OCR_RUNNING);
+		this.status = DocumentVersionStatus.OCR_COMPLETED;
+		this.updatedAt = now;
+	}
+
+	/** Records an OCR job failure; a completed OCR keeps its result. */
+	public boolean markOcrFailed(String code, Instant now) {
+		if (status != DocumentVersionStatus.AWAITING_OCR && status != DocumentVersionStatus.OCR_RUNNING) {
+			return false;
+		}
+		this.status = DocumentVersionStatus.OCR_FAILED;
+		this.failureCode = Objects.requireNonNull(code, "code");
+		this.updatedAt = now;
+		return true;
+	}
+
 	/**
 	 * Records a failure in the phase the version is in. A finished extraction keeps its result (a late failure, e.g.
 	 * a lost lease, cannot undo it).
@@ -155,7 +190,7 @@ public class DocumentVersion {
 		DocumentVersionStatus failed = switch (status) {
 			case UPLOADED, VALIDATING, VALIDATION_FAILED -> DocumentVersionStatus.VALIDATION_FAILED;
 			case VALIDATED, EXTRACTING, EXTRACTION_FAILED -> DocumentVersionStatus.EXTRACTION_FAILED;
-			case EXTRACTED, AWAITING_OCR -> null;
+			case EXTRACTED, AWAITING_OCR, OCR_RUNNING, OCR_COMPLETED, OCR_FAILED -> null;
 		};
 		if (failed == null) {
 			return false;
@@ -171,15 +206,20 @@ public class DocumentVersion {
 	 * resumes from the validated state (pages already extracted are kept).
 	 */
 	public void resetForRetry(Instant now) {
-		requireStatus(DocumentVersionStatus.VALIDATION_FAILED, DocumentVersionStatus.EXTRACTION_FAILED);
-		this.status = status == DocumentVersionStatus.VALIDATION_FAILED ? DocumentVersionStatus.UPLOADED
-				: DocumentVersionStatus.VALIDATED;
+		requireStatus(DocumentVersionStatus.VALIDATION_FAILED, DocumentVersionStatus.EXTRACTION_FAILED,
+				DocumentVersionStatus.OCR_FAILED);
+		this.status = switch (status) {
+			case VALIDATION_FAILED -> DocumentVersionStatus.UPLOADED;
+			case EXTRACTION_FAILED -> DocumentVersionStatus.VALIDATED;
+			default -> DocumentVersionStatus.AWAITING_OCR;
+		};
 		this.failureCode = null;
 		this.updatedAt = now;
 	}
 
 	public boolean isFailed() {
-		return status == DocumentVersionStatus.VALIDATION_FAILED || status == DocumentVersionStatus.EXTRACTION_FAILED;
+		return status == DocumentVersionStatus.VALIDATION_FAILED || status == DocumentVersionStatus.EXTRACTION_FAILED
+				|| status == DocumentVersionStatus.OCR_FAILED;
 	}
 
 	private void requireStatus(DocumentVersionStatus... allowed) {
@@ -245,6 +285,10 @@ public class DocumentVersion {
 
 	public UUID getExtractionJobId() {
 		return extractionJobId;
+	}
+
+	public UUID getOcrJobId() {
+		return ocrJobId;
 	}
 
 	public Instant getUploadedAt() {

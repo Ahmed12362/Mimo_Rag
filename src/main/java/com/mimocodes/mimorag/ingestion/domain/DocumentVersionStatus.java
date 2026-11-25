@@ -20,6 +20,12 @@ public enum DocumentVersionStatus {
 	/** Native extraction is done and some pages (or image regions) need OCR (slice 2d). */
 	AWAITING_OCR,
 	/** Extraction failed for the whole document; {@code failureCode} says why. */
-	EXTRACTION_FAILED
+	EXTRACTION_FAILED,
+	/** OCR is running for the pages (or image regions) that need it. */
+	OCR_RUNNING,
+	/** OCR finished; the version waits for human review (M3). OCR output is never approved content by itself. */
+	OCR_COMPLETED,
+	/** OCR failed for the whole document; {@code failureCode} says why. Retryable. */
+	OCR_FAILED
 
 }

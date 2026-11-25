@@ -81,6 +81,12 @@ mimorag:
     # Original files and the upload spool. Keep it outside the repository, e.g. D:/mimorag-data (decision D-23).
     # Other ingestion and job limits have code defaults; see README "Configuration".
     storage-root: ${MIMORAG_INGESTION_STORAGE_ROOT:data/storage}
+  ocr:
+    # Off by default: pages needing OCR then stay AWAITING_OCR. See docs/adr/0014-ocr-service.md.
+    enabled: ${MIMORAG_OCR_ENABLED:false}
+    base-url: ${MIMORAG_OCR_BASE_URL:http://127.0.0.1:8090}
+    # Service-to-service token shared with the OCR service (at least 32 characters when enabled).
+    token: ${MIMORAG_OCR_TOKEN:}
   security:
     public-api-docs: false
     # Hex SHA-256 of the bootstrap platform-admin key. Empty = admin plane disabled (every admin call gets 401).

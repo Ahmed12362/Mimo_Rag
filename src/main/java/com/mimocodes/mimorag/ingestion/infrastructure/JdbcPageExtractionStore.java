@@ -128,7 +128,7 @@ class JdbcPageExtractionStore implements PageExtractionStore {
 						json.readValue(rs.getString("quality"), MAP), json.readValue(rs.getString("lines"), LIST_OF_MAPS),
 						json.readValue(rs.getString("images"), REGIONS), rs.getDouble("image_coverage"),
 						rs.getDouble("page_width"), rs.getDouble("page_height"), rs.getInt("rotation"),
-						rs.getInt("duration_ms")),
+						rs.getInt("duration_ms"), null),
 				integrationId, runId, pageNumber)
 			.stream()
 			.findFirst();

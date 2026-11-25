@@ -45,10 +45,19 @@ public interface PageExtractionStore {
 	 * One page. {@code text} is the trusted result only; untrusted native text is never returned.
 	 *
 	 * @param quality quality signals and, for untrusted text, the reasons
+	 * @param ocr the page's OCR result ({@code reviewState UNREVIEWED}), kept apart from {@code text}; {@code null}
+	 *     when the page has none
 	 */
 	record PageDetail(int pageNumber, PageClass pageClass, String text, boolean nativeTextTrusted,
 			Set<String> scripts, Set<PageWarning> warnings, Map<String, Object> quality, List<Map<String, Object>> lines,
-			List<Region> images, double imageCoverage, double width, double height, int rotation, int durationMillis) {
+			List<Region> images, double imageCoverage, double width, double height, int rotation, int durationMillis,
+			Map<String, Object> ocr) {
+
+		public PageDetail withOcr(Map<String, Object> ocrResult) {
+			return new PageDetail(pageNumber, pageClass, text, nativeTextTrusted, scripts, warnings, quality, lines,
+					images, imageCoverage, width, height, rotation, durationMillis, ocrResult);
+		}
+
 	}
 
 }

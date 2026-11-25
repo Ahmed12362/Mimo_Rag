@@ -177,7 +177,9 @@ Isolation is enforced in layers, so a single bug does not leak data.
     SHA-256 first;
   - stored originals use keys built only from UUIDs, live outside the web root and are read-only; client file names
     are metadata only, stripped of path parts, control, bidi and zero-width characters;
-  - OCR will run in a separate container (slice 2d).
+  - OCR runs in a separate container (slice 2d) that only receives PNGs rendered by the application, checks the PNG
+    header against size and pixel limits before decoding, and requires a service token on every request
+    ([ADR-0014](adr/0014-ocr-service.md)).
 - **Rate limits and quotas** per integration and per user: uploads, OCR pages, embeddings, chat turns, tool calls (M2 onward; full quotas in M11).
 - **SQL injection:** parameterized queries only. The LLM never produces SQL.
 - **XSS:** the API returns JSON only, with `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY`. The review UI milestone adds a CSP and controlled embedding (`frame-ancestors`).
@@ -268,6 +270,19 @@ These events are audited, as append-only records with integration, principal, ac
 | Page text requires `DOCUMENT_REVIEW`; upload-only keys see the summary only; others get 404 | `PageQueryService` | `NativeExtractionIntegrationTest` |
 | Page rows are insert-only for the runtime role; unique per run and page (crash and concurrency safe) | V7 (`REVOKE UPDATE, DELETE`, unique constraint, `ON CONFLICT DO NOTHING`) | `NativeExtractionIntegrationTest` |
 | Bounded memory and time per page (resource cache off, temp-file stream cache, glyph and text caps, per-page timeout) | `PdfBoxNativeTextExtractor`, `PageClassifier` | measured in `PROJECT_PROGRESS.md` (2c) |
+
+### Implemented in M2 slice 2d
+
+| Control | Where | Verified by |
+|---|---|---|
+| Service-to-service token on every OCR request (constant-time compare; ≥ 32 chars, required at startup on both sides) | `ocr-service/app/main.py`, `OcrProperties` | `test_api.py`, `OcrIntegrationTest` (401 → `OCR_CONFIGURATION_ERROR`) |
+| OCR service not reachable from other hosts: loopback-only port in development, no published port in production | `docker-compose.yml`, ADR-0014 | configuration review |
+| The service never parses PDFs; PNG header checked against body, side and pixel limits before decoding | `PdfBoxPageRenderer`, `ocr-service/app/png.py` | `test_png.py`, `test_api.py` |
+| Bounded resources: admission queue (503 + `Retry-After`), per-request time limit with worker kill, worker recycling, container memory/CPU caps, read-only root filesystem, non-root, no capabilities | `ocr-service/app/pool.py`, `docker-compose.yml` | `test_api.py` |
+| Every OCR response validated (contract version, image size, limits, boxes, known flags, Arabic text unchanged by recovery); 5 MB response cap; no redirects | `OcrResponseValidator`, `HttpOcrProvider` | `HttpOcrProviderTest`, `OcrIntegrationTest` |
+| OCR output kept apart from approved content (`UNREVIEWED`, separate `ocr` object, never `text`); RAG modules cannot depend on ingestion | `PageQueryService`, `ArchitectureRulesTest` | `OcrIntegrationTest`, `ArchitectureRulesTest` |
+| OCR rows insert-only for the runtime role, forced RLS, unique per run and page | V8 | `OcrIntegrationTest`, `RlsCoverageIntegrationTest` |
+| Service logs carry no recognised text or images | `ocr-service/app/main.py` | code review |
 
 **Not yet implemented (planned):** general API rate limiting (per-integration upload quotas exist since M2), `jti`
 replay cache for user assertions on write operations (uploads accept assertions; open item from slice 2b), admin

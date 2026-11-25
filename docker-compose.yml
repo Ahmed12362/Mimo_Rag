@@ -29,5 +29,35 @@ services:
           memory: 1g
     restart: unless-stopped
 
+  # Optional OCR service (slice 2d). Started only with `docker compose --profile ocr up -d ocr`.
+  # Development setup: published on loopback only so the app (running on the host) can reach it.
+  # In production it must not be published at all; see docs/adr/0014-ocr-service.md.
+  ocr:
+    profiles: ["ocr"]
+    build:
+      context: ./ocr-service
+      target: runtime
+    image: mimorag-ocr:2d
+    environment:
+      # Empty token = the service refuses to start (at least 32 characters required).
+      OCR_TOKEN: ${MIMORAG_OCR_TOKEN:-}
+      OCR_PROCESSES: 1
+      OCR_THREADS: 4
+    ports:
+      - "127.0.0.1:${MIMORAG_OCR_PORT:-8090}:8090"
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m
+    user: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "4"
+    restart: unless-stopped
+
 volumes:
   mimorag-pgdata:

@@ -93,6 +93,8 @@ infrastructure (JPA repositories, HTTP clients, provider adapters) ──impleme
 12. The PDF library (`org.apache.pdfbox`, `org.apache.fontbox`) is used only inside `ingestion.infrastructure`.
 13. `jobs` depends on no business module (only `integration.application`, for credential re-validation).
 14. `ingestion` uses `knowledgebase` only through its application layer.
+15. `indexing`, `retrieval`, `agent` and `tools` never depend on `ingestion`: unreviewed extraction and OCR output can
+    only reach RAG through approved content (M3).
 
 Rules that target modules not yet implemented use `allowEmptyShould(true)`, so they start protecting each module the moment its first class appears.
 
@@ -158,6 +160,25 @@ outbox and no broker**. A job is inserted in the same transaction as the busines
   permanent failure; or cancellation (identity or Knowledge Base no longer valid). The job's final state and the owning
   module's reaction commit in one transaction.
 - **Idempotency:** handlers tolerate re-runs; uploads use `Idempotency-Key` and content hashes.
+
+### OCR (implemented in M2 slice 2d)
+
+Decided in [ADR-0014](adr/0014-ocr-service.md). OCR runs in a separate Python container (`ocr-service/`) behind the
+`OcrProvider` port; the application renders pages with PDFBox and sends PNGs, so the service never parses PDFs.
+
+```
+EXTRACT_DOCUMENT ──(same transaction: version AWAITING_OCR + OCR job)──► OCR_DOCUMENT job
+   │                                                                       │ per page: render (PDFBox, 300 DPI)
+   ▼                                                                       ▼   → POST /v1/ocr (token) → validate
+ page_extraction (native text, classes, image regions)                  page_ocr (UNREVIEWED proposal, insert-only)
+```
+
+- Own job kind, worker pool (1) and per-integration limit (1): OCR never delays native extraction and one tenant
+  cannot occupy the service.
+- One page per commit; resume skips stored pages; rows unique per run and page.
+- Service unavailable → the job retries; a bad page (rejected, invalid answer, engine error after 3 tries, time
+  limit) fails alone; misconfiguration fails the job.
+- OCR text is never the page's `text` and is never indexed before review.
 
 ## 10. Performance strategy
 

@@ -18,6 +18,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param retryMaxDelay upper bound for the retry delay
  * @param workers worker threads per job kind; kinds without an entry get one worker
  * @param perIntegrationConcurrency maximum running jobs of one kind per integration (fairness between tenants)
+ * @param kindConcurrency per-kind overrides of {@code perIntegrationConcurrency}; {@code OCR_DOCUMENT} defaults to 1
+ *     so one tenant's large scan cannot occupy the whole OCR service
  * @param shutdownTimeout how long a graceful shutdown waits for running jobs
  */
 @ConfigurationProperties("mimorag.jobs")
@@ -25,7 +27,8 @@ public record JobProperties(@DefaultValue("true") boolean enabled, @DefaultValue
 		@DefaultValue("PT2M") Duration lease, @DefaultValue("PT30S") Duration heartbeatInterval,
 		@DefaultValue("3") int maxAttempts, @DefaultValue("PT30S") Duration retryBaseDelay,
 		@DefaultValue("PT15M") Duration retryMaxDelay, Map<String, Integer> workers,
-		@DefaultValue("2") int perIntegrationConcurrency, @DefaultValue("PT30S") Duration shutdownTimeout) {
+		@DefaultValue("2") int perIntegrationConcurrency, @DefaultValue("PT30S") Duration shutdownTimeout,
+		Map<String, Integer> kindConcurrency) {
 
 	public JobProperties {
 		// Keys are job kinds; accept any spelling that property binding may produce (extract-document, extract.document).
@@ -34,6 +37,14 @@ public record JobProperties(@DefaultValue("true") boolean enabled, @DefaultValue
 					.stream()
 					.collect(java.util.stream.Collectors.toUnmodifiableMap(entry -> normaliseKind(entry.getKey()),
 							Map.Entry::getValue, (first, second) -> second));
+		Map<String, Integer> concurrency = new java.util.HashMap<>(Map.of("OCR_DOCUMENT", 1));
+		if (kindConcurrency != null) {
+			kindConcurrency.forEach((kind, limit) -> concurrency.put(normaliseKind(kind), limit));
+		}
+		if (concurrency.values().stream().anyMatch(limit -> limit == null || limit < 1)) {
+			throw new IllegalArgumentException("mimorag.jobs.kind-concurrency values must be at least 1");
+		}
+		kindConcurrency = Map.copyOf(concurrency);
 		if (heartbeatInterval.compareTo(lease.dividedBy(2)) > 0) {
 			throw new IllegalArgumentException("mimorag.jobs.heartbeat-interval must be at most half of the lease");
 		}
@@ -47,6 +58,11 @@ public record JobProperties(@DefaultValue("true") boolean enabled, @DefaultValue
 
 	public int workersFor(String kind) {
 		return Math.max(1, workers.getOrDefault(normaliseKind(kind), 1));
+	}
+
+	/** Maximum running jobs of this kind per integration. */
+	public int perIntegrationConcurrencyFor(String kind) {
+		return kindConcurrency.getOrDefault(normaliseKind(kind), perIntegrationConcurrency);
 	}
 
 	private static String normaliseKind(String key) {

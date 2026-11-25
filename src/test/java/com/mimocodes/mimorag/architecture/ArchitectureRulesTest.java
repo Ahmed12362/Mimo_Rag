@@ -135,6 +135,19 @@ class ArchitectureRulesTest {
 		.resideInAnyPackage(ROOT + ".knowledgebase.api..", ROOT + ".knowledgebase.infrastructure..")
 		.allowEmptyShould(true);
 
+	/**
+	 * Unreviewed OCR output stays inside ingestion: the modules that chunk, embed, index or answer may only read
+	 * approved content (from review, M3), never ingestion's raw extraction or OCR tables (decision: human review
+	 * before RAG ingestion).
+	 */
+	@ArchTest
+	static final ArchRule ragModulesNeverReadRawIngestionOutput = noClasses().that()
+		.resideInAnyPackage(ROOT + ".indexing..", ROOT + ".retrieval..", ROOT + ".agent..", ROOT + ".tools..")
+		.should()
+		.dependOnClassesThat()
+		.resideInAPackage(ROOT + ".ingestion..")
+		.allowEmptyShould(true);
+
 	@ArchTest
 	static final ArchRule apiLayerDoesNotReachIntoInfrastructure = noClasses().that()
 		.resideInAPackage("..api..")

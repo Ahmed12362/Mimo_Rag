@@ -9,8 +9,81 @@ Milestone scope and decisions: [docs/roadmap.md](docs/roadmap.md). This file rec
 | M1 hardening — key lifecycle, KB-restricted keys, review fixes | ✅ Done (commits `fa683c7`, `87c8105`) | `fix/m1-hardening` → `main` |
 | M2 slice 2a — OCR benchmark | ✅ Done (commit `4f897f1`); report: [docs/benchmarks/ocr-benchmark-2a.md](docs/benchmarks/ocr-benchmark-2a.md) | `feature/m2-pdf-upload-extraction` |
 | M2 slice 2b — upload, storage, job queue | ✅ Done (committed on the feature branch) | `feature/m2-pdf-upload-extraction` |
-| M2 slice 2c — native text extraction | ✅ Done (committed on its branch) | `feature/m2c-native-extraction` |
-| M2 slices 2d–2e, M3 – M11 | Not started | — |
+| M2 slice 2c — native text extraction | ✅ Done (commit `20c69da`) | `feature/m2c-native-extraction` |
+| M2 slice 2d — OCR service | ✅ Done, awaiting commit approval; results: [docs/benchmarks/ocr-2d-results.md](docs/benchmarks/ocr-2d-results.md) | `feature/m2d-ocr` |
+| M2 slice 2e, M3 – M11 | Not started | — |
+
+---
+
+## M2 slice 2d — OCR service
+
+**Date:** 2026-11-24/25 · **Decisions:** D-42 to D-47 (2d decisions A–D, requirements 1–6, A1/B1 follow-up) ·
+ADR-0014 · **Migration:** V8
+
+### Delivered
+
+- **OCR service** (`ocr-service/`, image `mimorag-ocr:2d`, 2.41 GB): FastAPI, one OCR worker process × 4 threads
+  (spawned, killed on time-out, recycled after 500 requests), bounded admission (503 + `Retry-After`), PNG header
+  limits before decoding, service token on every request, problem+json errors, no text in logs; gated hybrid pipeline
+  `gated-hybrid/2d.3` (insert-only token recovery, flags, orientation on every page with upside-down retry).
+- **Application:** `OCR_DOCUMENT` job enqueued atomically with the extraction result; per-kind worker pool and
+  per-integration limit (1); PDFBox rendering at 300 DPI with bilinear image scaling (pages, or image regions of
+  `MIXED` pages); `HttpOcrProvider` (no redirects, 5 MB response cap, HTTP/1.1) and `OcrResponseValidator`; per-page
+  commits, resume without duplicates; OCR lines overlapping native text dropped on mixed pages; version states
+  `OCR_RUNNING`, `OCR_COMPLETED`, `OCR_FAILED` (retryable).
+- **Database (V8):** `ocr_run`, `page_ocr` (insert-only for the runtime role, unique per run and page, forced RLS).
+- **API:** page detail gains a separate `ocr` object (`reviewState: UNREVIEWED`, never `text`); extraction summary gains
+  `ocr`; job view gains `nextJobId`, version view `ocrJobId`; OCR jobs visible and retryable through the job API.
+- **Config:** `MIMORAG_OCR_ENABLED` (default false), `MIMORAG_OCR_BASE_URL`, `MIMORAG_OCR_TOKEN`; compose profile `ocr`
+  (loopback port, read-only root, non-root, no capabilities, 2 GB / 4 CPUs).
+- **Docs:** ADR-0014 (contract, limits, failure handling, retries, production security vs development networking),
+  `ocr-service/README.md`, results report, README, architecture, security architecture, roadmap, Postman (2.9).
+
+### Acceptance criteria
+
+| # | Criterion | Result | Evidence |
+|---|---|---|---|
+| 1 | Independently deployable, decoupled service | ✅ | separate image and compose profile; only `OcrProvider` knows HTTP; contract v1 tested against captured real responses |
+| 2 | Strict limits (size, pixels, time, concurrency) | ✅ | ADR-0014 limits table; `test_png.py`, `test_api.py`, `HttpOcrProviderTest` |
+| 3 | Responses validated; confidence, engine, warnings, metadata kept | ✅ | `OcrResponseValidator`; `OcrIntegrationTest` (invalid answers fail only their page) |
+| 4 | Idempotent retries, crash recovery, no duplicates | ✅ | `crashedOcrResumesAfterTheStoredPagesWithoutDuplicates`, concurrent duplicate insert → 1 row, retry after `OCR_FAILED` |
+| 5 | OCR kept apart from approved content | ✅ | `text` stays null, `UNREVIEWED`, read-only rows, ArchUnit rule for RAG modules |
+| 6 | Contract and failure handling documented | ✅ | ADR-0014 |
+| 7 | Accuracy: every profile ≤ +1.5 points vs 2a (hard) | ✅ | vector +0.72, clean300 +0.55, lowres150 −0.06, noisy200 −0.51, rotated300 −0.65 |
+| 8 | Orientation: upright no worse; upside-down within 1 point of upright | ⚠️ upright ✅; upside-down 20.10 % vs 19.60 % — **known limitation accepted 2026-11-25** (diacritised page; other six pages 9.0 % vs 9.4 % upright) | ocr-2d-results.md §1 |
+| 9 | 1 × 4 vs 2 × 2 measured; default stays 1 × 4 | ✅ | 8.5 vs 8.4 pages/min; 1 140 vs 1 963 MiB |
+
+### Automated tests — `./mvnw test` → **BUILD SUCCESS, 337 tests, 0 failures** (2c: 314)
+
+New: `OcrIntegrationTest` (11, against `FakeOcrServer`), `HttpOcrProviderTest` (10, incl. 3 captured real responses),
+`OcrDisabledHandOffIntegrationTest` (1), one ArchUnit rule; Python service: 39 tests. Two 2c assertions now accept
+`AWAITING_OCR`/`OCR_RUNNING`/`OCR_COMPLETED` because OCR is enabled in the suite (planned behaviour change). Opt-in:
+`-Pocr-it` (accuracy gate) and `-Pocr-bench` (throughput).
+
+**Defects found before commit:** (1) the Java contract expected `width`/`height` at the top level while the service
+returns `image` — every real page would have failed validation (now covered by captured responses); (2) a service-side
+page time-out failed the whole job (now that page only); (3) JDK client attempted an HTTP/2 upgrade on every request;
+(4) PDFBox nearest-neighbour enlargement of scans broke the accuracy gate (bilinear adopted); (5) the orientation
+classifier misses upside-down PDFBox renderings (upside-down retry added); (6) the gate's own metric ordered rotated
+pages in the wrong frame (fixed; thresholds unchanged).
+
+### Measurements (measured, not estimated)
+
+| Measurement | Value |
+|---|---|
+| OCR throughput, 1 × 4, 2 pages in flight | 8.5 pages/min |
+| OCR container peak memory, 1 × 4 / 2 × 2 | 1 140 / 1 963 MiB |
+| API p95 while OCR runs | 102 ms (1 × 4) |
+| Rendering per page (PDFBox, bilinear) | ≈ 210 ms |
+| Orientation classifier per page | mean 22 ms, max 45 ms |
+| Orientation overhead incl. extra OCR passes | +647 ms per page (+24 %), single run |
+
+### Known limitations
+
+- Fully diacritised upside-down pages are not corrected (recogniser limitation; accepted).
+- OCR results cannot be corrected or approved yet (M3).
+- Versions that reached `AWAITING_OCR` while OCR was disabled are not enqueued automatically when OCR is enabled later.
+- The service accepts one token; rotation needs a coordinated restart.
 
 ---
 

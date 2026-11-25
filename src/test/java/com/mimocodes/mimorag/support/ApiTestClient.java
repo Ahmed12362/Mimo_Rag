@@ -144,6 +144,14 @@ public final class ApiTestClient {
 		return readJson(upload(apiKey, kbId, "test.pdf", content), 202);
 	}
 
+	/**
+	 * Uploads with a caller-chosen correlation id and expects 202. Background jobs inherit the id, and the OCR
+	 * requests carry it, which lets {@link FakeOcrServer} scripts target one upload.
+	 */
+	public JsonNode uploadAccepted(String apiKey, UUID kbId, byte[] content, String correlationId) throws Exception {
+		return readJson(upload(apiKey, kbId, "test.pdf", content).header("X-Correlation-Id", correlationId), 202);
+	}
+
 	/** Polls an ingestion job until it reaches a final state, or fails the test after {@code timeout}. */
 	public JsonNode awaitJob(String apiKey, String jobId, Duration timeout) throws Exception {
 		Instant deadline = Instant.now().plus(timeout);

@@ -3,8 +3,10 @@ package com.mimocodes.mimorag.ingestion.application;
 import java.util.Set;
 import java.util.UUID;
 
+import com.mimocodes.mimorag.jobs.application.JobFailure;
 import com.mimocodes.mimorag.knowledgebase.application.KnowledgeBaseService;
 import com.mimocodes.mimorag.knowledgebase.application.KnowledgeBaseView;
+import com.mimocodes.mimorag.knowledgebase.domain.KnowledgeBaseStatus;
 import com.mimocodes.mimorag.shared.access.AccessContext;
 import com.mimocodes.mimorag.shared.access.Permission;
 import com.mimocodes.mimorag.shared.error.ResourceNotFoundException;
@@ -24,6 +26,26 @@ class KnowledgeBaseGate {
 
 	KnowledgeBaseGate(KnowledgeBaseService knowledgeBases) {
 		this.knowledgeBases = knowledgeBases;
+	}
+
+	/**
+	 * For background jobs: the Knowledge Base must still exist for this identity, be active, and allow uploads;
+	 * otherwise the job is cancelled (revalidation), not failed.
+	 */
+	void requireStillAcceptsWork(AccessContext access, UUID knowledgeBaseId) {
+		KnowledgeBaseView kb;
+		try {
+			kb = knowledgeBases.get(access, knowledgeBaseId);
+		}
+		catch (ResourceNotFoundException gone) {
+			throw JobFailure.revalidation("KNOWLEDGE_BASE_UNAVAILABLE");
+		}
+		if (kb.status() != KnowledgeBaseStatus.ACTIVE) {
+			throw JobFailure.revalidation("KNOWLEDGE_BASE_ARCHIVED");
+		}
+		if (!kb.yourPermissions().contains(Permission.DOCUMENT_UPLOAD)) {
+			throw JobFailure.revalidation("UPLOAD_PERMISSION_REVOKED");
+		}
 	}
 
 	/** The Knowledge Base if the caller holds any document permission on it; otherwise "not found" for resource. */

@@ -1,0 +1,8 @@
+# Direct dependencies (pinned). The image installs requirements.lock.txt, which pins every transitive package too;
+# regenerate it after changing this file (see README).
+paddlepaddle==3.2.2
+paddleocr==3.7.0
+paddlex==3.7.2
+fastapi==0.162.4
+uvicorn==0.54.0
+pydantic==2.14.3

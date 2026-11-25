@@ -13,7 +13,6 @@ import com.mimocodes.mimorag.ingestion.application.DocumentViews.DocumentSummary
 import com.mimocodes.mimorag.ingestion.application.DocumentViews.IngestionJobView;
 import com.mimocodes.mimorag.ingestion.domain.Document;
 import com.mimocodes.mimorag.ingestion.domain.DocumentVersion;
-import com.mimocodes.mimorag.ingestion.domain.ExtractionRun;
 import com.mimocodes.mimorag.jobs.application.JobQueue;
 import com.mimocodes.mimorag.jobs.application.JobQueue.JobView;
 import com.mimocodes.mimorag.jobs.application.JobStatus;
@@ -58,9 +57,16 @@ public class DocumentQueryService {
 
 	private final ExtractionRunRepository runs;
 
+	private final OcrRunRepository ocrRuns;
+
+	/** Job kinds that belong to document ingestion (others are not visible through this API). */
+	private static final Set<String> INGESTION_KINDS = Set.of(DocumentUploadService.EXTRACT_DOCUMENT,
+			OcrService.OCR_DOCUMENT);
+
 	DocumentQueryService(KnowledgeBaseService knowledgeBases, DocumentRepository documents,
 			DocumentVersionRepository versions, JobQueue jobs, AuditRecorder audit, Clock clock, KnowledgeBaseGate gate,
-			ExtractionRunRepository runs) {
+			ExtractionRunRepository runs, OcrRunRepository ocrRuns) {
+		this.ocrRuns = ocrRuns;
 		this.gate = gate;
 		this.runs = runs;
 		this.knowledgeBases = knowledgeBases;
@@ -106,7 +112,7 @@ public class DocumentQueryService {
 		JobView job = loadJob(access, jobId);
 		DocumentVersion version = versionOf(access, job);
 		requireReadable(access, version.getKnowledgeBaseId(), "ingestion-job");
-		return IngestionJobView.of(job, version, runOf(access, job));
+		return IngestionJobView.of(job, version, progressOf(access, job));
 	}
 
 	/**
@@ -123,7 +129,7 @@ public class DocumentQueryService {
 			throw new OperationNotPermittedException(Permission.DOCUMENT_UPLOAD);
 		}
 		if (!job.status().isFinished()) {
-			return IngestionJobView.of(job, version, runOf(access, job));
+			return IngestionJobView.of(job, version, progressOf(access, job));
 		}
 		if (job.status() == JobStatus.SUCCEEDED) {
 			throw new ConflictException("The job already succeeded.");
@@ -140,23 +146,33 @@ public class DocumentQueryService {
 		}
 		audit.record(AuditEvent.success("INGESTION_JOB_RETRIED", "ingestion-job", jobId)
 			.withDetails(Map.of("previousErrorCode", String.valueOf(job.errorCode()))));
-		return IngestionJobView.of(loadJob(access, jobId), version, runOf(access, job));
+		return IngestionJobView.of(loadJob(access, jobId), version, progressOf(access, job));
 	}
 
-	private Optional<ExtractionRun> runOf(AccessContext access,
-			JobView job) {
-		return runs.findByIntegrationIdAndJobId(access.requireIntegrationId(), job.id());
+	private IngestionJobView.Progress progressOf(AccessContext access, JobView job) {
+		UUID integrationId = access.requireIntegrationId();
+		if (OcrService.OCR_DOCUMENT.equals(job.kind())) {
+			return ocrRuns.findByIntegrationIdAndJobId(integrationId, job.id())
+				.map(r -> new IngestionJobView.Progress(r.getPagesDone(), r.getPagesTotal()))
+				.orElse(null);
+		}
+		return runs.findByIntegrationIdAndJobId(integrationId, job.id())
+			.map(r -> new IngestionJobView.Progress(r.getPagesDone(), r.getPagesTotal()))
+			.orElse(null);
 	}
 
 	private JobView loadJob(AccessContext access, UUID jobId) {
 		return jobs.find(access, jobId)
-			.filter(job -> DocumentUploadService.EXTRACT_DOCUMENT.equals(job.kind()))
+			.filter(job -> INGESTION_KINDS.contains(job.kind()))
 			.orElseThrow(() -> new ResourceNotFoundException("ingestion-job"));
 	}
 
 	private DocumentVersion versionOf(AccessContext access, JobView job) {
-		return versions.findByIntegrationIdAndExtractionJobId(access.requireIntegrationId(), job.id())
-			.orElseThrow(() -> new ResourceNotFoundException("ingestion-job"));
+		UUID integrationId = access.requireIntegrationId();
+		Optional<DocumentVersion> version = OcrService.OCR_DOCUMENT.equals(job.kind())
+				? versions.findByIntegrationIdAndOcrJobId(integrationId, job.id())
+				: versions.findByIntegrationIdAndExtractionJobId(integrationId, job.id());
+		return version.orElseThrow(() -> new ResourceNotFoundException("ingestion-job"));
 	}
 
 	/** The Knowledge Base, if the caller may read its documents; otherwise "not found" for {@code resource}. */

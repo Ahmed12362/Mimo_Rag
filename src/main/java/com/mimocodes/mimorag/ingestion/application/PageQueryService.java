@@ -10,6 +10,7 @@ import com.mimocodes.mimorag.ingestion.domain.Document;
 import com.mimocodes.mimorag.ingestion.domain.DocumentVersion;
 import com.mimocodes.mimorag.ingestion.domain.DocumentVersionStatus;
 import com.mimocodes.mimorag.ingestion.domain.ExtractionRun;
+import com.mimocodes.mimorag.ingestion.domain.OcrRun;
 import com.mimocodes.mimorag.knowledgebase.application.KnowledgeBaseView;
 import com.mimocodes.mimorag.shared.access.AccessContext;
 import com.mimocodes.mimorag.shared.access.Permission;
@@ -45,8 +46,15 @@ public class PageQueryService {
 
 	private final AuditRecorder audit;
 
+	private final OcrRunRepository ocrRuns;
+
+	private final PageOcrStore ocrPages;
+
 	PageQueryService(DocumentRepository documents, DocumentVersionRepository versions, ExtractionRunRepository runs,
-			PageExtractionStore pages, KnowledgeBaseGate gate, AuditRecorder audit) {
+			PageExtractionStore pages, KnowledgeBaseGate gate, AuditRecorder audit, OcrRunRepository ocrRuns,
+			PageOcrStore ocrPages) {
+		this.ocrRuns = ocrRuns;
+		this.ocrPages = ocrPages;
 		this.documents = documents;
 		this.versions = versions;
 		this.runs = runs;
@@ -55,9 +63,20 @@ public class PageQueryService {
 		this.audit = audit;
 	}
 
-	/** Extraction progress and page counts per class. */
+	/** Extraction progress and page counts per class, plus the OCR run (if any). */
 	public record ExtractionSummary(UUID documentId, UUID versionId, DocumentVersionStatus versionStatus,
-			Integer pageCount, RunView run) {
+			Integer pageCount, RunView run, OcrRunView ocr) {
+	}
+
+	/** OCR progress. OCR results are proposals awaiting human review; they are never used as approved content. */
+	public record OcrRunView(UUID id, OcrRun.Status status, int pagesTotal, int pagesDone, int pagesFailed,
+			String failureCode, String reviewState, Instant startedAt, Instant finishedAt) {
+
+		static OcrRunView of(OcrRun run) {
+			return new OcrRunView(run.getId(), run.getStatus(), run.getPagesTotal(), run.getPagesDone(),
+					run.getPagesFailed(), run.getFailureCode(), "UNREVIEWED", run.getStartedAt(), run.getFinishedAt());
+		}
+
 	}
 
 	public record RunView(UUID id, ExtractionRun.Status status, String engine, String engineVersion, int pagesTotal,
@@ -78,7 +97,8 @@ public class PageQueryService {
 		Target target = load(access, documentId);
 		Optional<ExtractionRun> run = latestRun(access, target.version());
 		return new ExtractionSummary(documentId, target.version().getId(), target.version().getStatus(),
-				target.version().getPageCount(), run.map(RunView::of).orElse(null));
+				target.version().getPageCount(), run.map(RunView::of).orElse(null),
+				latestOcrRun(access, target.version()).map(OcrRunView::of).orElse(null));
 	}
 
 	@Transactional(readOnly = true)
@@ -92,9 +112,14 @@ public class PageQueryService {
 	@Transactional(readOnly = true)
 	public PageDetail page(AccessContext access, UUID documentId, int pageNumber) {
 		Target target = requireReview(access, documentId, "DOCUMENT_PAGE_READ");
-		return latestRun(access, target.version())
-			.flatMap(run -> pages.find(access.requireIntegrationId(), run.getId(), pageNumber))
+		UUID integrationId = access.requireIntegrationId();
+		PageDetail detail = latestRun(access, target.version())
+			.flatMap(run -> pages.find(integrationId, run.getId(), pageNumber))
 			.orElseThrow(() -> new ResourceNotFoundException("page"));
+		return latestOcrRun(access, target.version())
+			.flatMap(run -> ocrPages.find(integrationId, run.getId(), pageNumber))
+			.map(detail::withOcr)
+			.orElse(detail);
 	}
 
 	private record Target(KnowledgeBaseView knowledgeBase, DocumentVersion version) {
@@ -118,6 +143,11 @@ public class PageQueryService {
 			throw new OperationNotPermittedException(Permission.DOCUMENT_REVIEW);
 		}
 		return target;
+	}
+
+	private Optional<OcrRun> latestOcrRun(AccessContext access, DocumentVersion version) {
+		return ocrRuns.findFirstByIntegrationIdAndDocumentVersionIdOrderByStartedAtDesc(access.requireIntegrationId(),
+				version.getId());
 	}
 
 	private Optional<ExtractionRun> latestRun(AccessContext access, DocumentVersion version) {

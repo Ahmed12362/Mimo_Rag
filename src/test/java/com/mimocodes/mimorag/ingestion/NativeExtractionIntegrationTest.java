@@ -114,11 +114,13 @@ class NativeExtractionIntegrationTest extends PostgresIntegrationTest {
 	}
 
 	@Test
-	void scannedPageAwaitsOcrAndExposesNoText() throws Exception {
+	void scannedPageIsHandedToOcrAndExposesNoText() throws Exception {
 		JsonNode job = uploadAndWait(TestPdfs.imageOnly(UUID.randomUUID().toString()));
 		JsonNode page = page(job, 1);
 
-		assertThat(job.get("versionStatus").asString()).isEqualTo("AWAITING_OCR");
+		// OCR is enabled in the test suite, so the version may already have moved on (OcrIntegrationTest).
+		assertThat(job.get("versionStatus").asString()).isIn("AWAITING_OCR", "OCR_RUNNING", "OCR_COMPLETED");
+		assertThat(job.get("nextJobId").isNull()).as("the OCR job was enqueued with the extraction result").isFalse();
 		assertThat(page.get("pageClass").asString()).isEqualTo("OCR_REQUIRED");
 		assertThat(page.get("text").isNull()).isTrue();
 	}
@@ -128,7 +130,7 @@ class NativeExtractionIntegrationTest extends PostgresIntegrationTest {
 		JsonNode job = uploadAndWait(TestPdfs.textWithLargeImage(UUID.randomUUID().toString()));
 		JsonNode page = page(job, 1);
 
-		assertThat(job.get("versionStatus").asString()).isEqualTo("AWAITING_OCR");
+		assertThat(job.get("versionStatus").asString()).isIn("AWAITING_OCR", "OCR_RUNNING", "OCR_COMPLETED");
 		assertThat(page.get("pageClass").asString()).isEqualTo("MIXED");
 		assertThat(page.get("text").asString()).contains("Employees must read this notice carefully");
 		assertThat(page.get("images").size()).isEqualTo(1);

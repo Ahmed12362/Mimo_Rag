@@ -1,7 +1,7 @@
 {
   "info": {
-    "name": "MimoRag — M2 document upload and extraction (slices 2b, 2c)",
-    "description": "Run the requests in order. Before you start, set the collection variable `adminKey` to your plaintext platform-admin key (its SHA-256 is MIMORAG_ADMIN_KEY_SHA256). Every request saves the ids it returns, so later requests just work. In '2. Upload a PDF', choose a PDF file in Body > form-data > file. After the job succeeds, '2.6'–'2.8' show the extracted pages (2.7 and 2.8 need DOCUMENT_REVIEW).",
+    "name": "MimoRag — M2 document upload and extraction (slices 2b–2d)",
+    "description": "Run the requests in order. Before you start, set the collection variable `adminKey` to your plaintext platform-admin key (its SHA-256 is MIMORAG_ADMIN_KEY_SHA256). Every request saves the ids it returns, so later requests just work. In '2. Upload a PDF', choose a PDF file in Body > form-data > file. After the job succeeds, '2.6'–'2.8' show the extracted pages (2.7 and 2.8 need DOCUMENT_REVIEW). OCR (slice 2d): when the PDF has scanned pages and the OCR service is enabled, '2.2' saves the OCR job id (nextJobId) and '2.9' follows it; '2.8' then also shows the page's OCR proposal in a separate 'ocr' object (reviewState UNREVIEWED; never part of 'text').",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -35,6 +35,10 @@
     },
     {
       "key": "jobId",
+      "value": ""
+    },
+    {
+      "key": "ocrJobId",
       "value": ""
     }
   ],
@@ -233,7 +237,8 @@
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
                   "const job = pm.response.json();",
-                  "console.log(job.status, job.errorCode, 'pages:', job.pageCount);"
+                  "console.log(job.status, job.errorCode, 'pages:', job.pageCount);",
+                  "if (job.nextJobId) { pm.collectionVariables.set('ocrJobId', job.nextJobId); console.log('OCR job:', job.nextJobId); }"
                 ]
               }
             }
@@ -398,6 +403,33 @@
             ],
             "url": "{{baseUrl}}/api/v1/documents/{{documentId}}/pages/1",
             "description": "DOCUMENT_REVIEW. text is null when the page needs OCR or its native text is unreliable (never exposed). Change the page number in the URL."
+          }
+        },
+        {
+          "name": "2.9 OCR job status (repeat until SUCCEEDED / FAILED)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const job = pm.response.json();",
+                  "pm.test('OCR job', () => pm.expect(job.kind).to.eql('OCR_DOCUMENT'));",
+                  "console.log(job.status, job.errorCode, 'version:', job.versionStatus, 'progress:', JSON.stringify(job.progress));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/ingestion-jobs/{{ocrJobId}}",
+            "description": "Requires MIMORAG_OCR_ENABLED=true and the OCR service (docker compose --profile ocr up -d ocr). A failed OCR job can be retried with 2.5 using this id."
           }
         }
       ]

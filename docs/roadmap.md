@@ -17,7 +17,7 @@ _Last updated: 2026-11-24._
 | M0 — Repository inspection and architecture baseline | ✅ Done (committed `d963e59`; `main` created at this commit) |
 | M1 — Integration and Knowledge Base foundation (identity, RLS) | ✅ Done (`5db21e9` on `main`) |
 | M1 hardening — key lifecycle, KB-restricted keys, review fixes | ✅ Done (`fa683c7`, `87c8105` on `main`) |
-| M2 — PDF upload and extraction | **In progress** on `feature/m2-pdf-upload-extraction`: 2a OCR benchmark ✅ (`4f897f1`), 2b upload and job queue ✅ (`6a4e36d`), 2c native extraction ✅ (`feature/m2c-native-extraction`), 2d–2e not started |
+| M2 — PDF upload and extraction | **In progress** on `feature/m2-pdf-upload-extraction`: 2a OCR benchmark ✅ (`4f897f1`), 2b upload and job queue ✅ (`6a4e36d`), 2c native extraction ✅ (`20c69da`), 2d OCR service ✅ (`feature/m2d-ocr`), 2e not started |
 | M3 — Review, submit and approved snapshot (API-first) | Not started |
 | M4 — Chunking, embeddings, indexing | Not started |
 | M4b — Embeddable review UI | Not started (after M4) |
@@ -70,6 +70,12 @@ Detailed acceptance results: [`PROJECT_PROGRESS.md`](../PROJECT_PROGRESS.md).
 | D-39 | The 9 synthetic digital PDFs and their ground truth are committed as regression fixtures (2c decision c) | `src/test/resources/corpus/synthetic/` |
 | D-40 | Hidden or suspicious content is kept and flagged, never removed (2c decision d) | Slice 2c |
 | D-41 | Unreliable native text is stored internally, flagged `NATIVE_TEXT_UNRELIABLE`, classified `OCR_REQUIRED`, and never returned as the page result (2c decision e) | Slice 2c, V7 CHECK |
+| D-42 | OCR runs as a separate Python service (`ocr-service/`, FastAPI, PaddleOCR + Tesseract) behind the `OcrProvider` port, with its own job kind `OCR_DOCUMENT` (1 worker, 1 running job per integration); the application renders PNGs with PDFBox and the service never parses PDFs (2d decisions A–C) | [ADR-0014](adr/0014-ocr-service.md) |
+| D-43 | Service-to-service token on every OCR request; no published port in production, loopback only in development; every response validated (Arabic text never altered by token recovery) | ADR-0014 |
+| D-44 | OCR output is an `UNREVIEWED` proposal stored apart from page text; RAG modules may not depend on `ingestion` (ArchUnit) | ADR-0014, D-34 |
+| D-45 | Scan images are enlarged bilinearly in PDFBox (nearest neighbour and bicubic each broke the 1.5-point gate) | [ocr-2d-results.md](benchmarks/ocr-2d-results.md) |
+| D-46 | Orientation (revises D-32): classifier on every page plus an upside-down retry for poorly read pages; a rotation is applied only when clearly better. Known limitation accepted 2026-11-25: fully diacritised upside-down pages are not corrected | ocr-2d-results.md |
+| D-47 | OCR worker layout stays 1 process × 4 threads (2 × 2: same throughput, +72 % memory) (resolves D-33) | ocr-2d-results.md |
 
 ### 0.3 Git workflow
 

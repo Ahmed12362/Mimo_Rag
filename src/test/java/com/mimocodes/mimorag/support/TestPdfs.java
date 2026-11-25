@@ -101,6 +101,54 @@ public final class TestPdfs {
 		return withImage(marker, true, 72, 200, 400, 300);
 	}
 
+	/** {@code pages} scanned-looking pages (one full-page image each, no text). */
+	public static byte[] imageOnlyPages(int pages, String marker) {
+		try (PDDocument document = new PDDocument()) {
+			java.awt.image.BufferedImage image = new java.awt.image.BufferedImage(60, 60,
+					java.awt.image.BufferedImage.TYPE_BYTE_GRAY);
+			org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject xobject = org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory
+				.createFromImage(document, image);
+			for (int i = 0; i < pages; i++) {
+				PDPage page = new PDPage();
+				document.addPage(page);
+				try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+					content.drawImage(xobject, 0, 0, 612, 792);
+				}
+			}
+			document.getDocumentInformation().setSubject(marker);
+			return save(document);
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
+	}
+
+	/**
+	 * Like {@link #textWithLargeImage} (photo at x 72-472, y 200-500 in PDF coordinates), plus a native text caption
+	 * printed over the photo at baseline y 350: OCR of the photo region would read the caption a second time.
+	 */
+	public static byte[] photoWithCaption(String marker) {
+		try (PDDocument document = new PDDocument()) {
+			PDPage page = new PDPage();
+			document.addPage(page);
+			java.awt.image.BufferedImage image = new java.awt.image.BufferedImage(60, 60,
+					java.awt.image.BufferedImage.TYPE_BYTE_GRAY);
+			org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject xobject = org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory
+				.createFromImage(document, image);
+			try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+				content.drawImage(xobject, 72, 200, 400, 300);
+				write(content, 72, 720, 12, "Employees must read this notice carefully " + marker);
+				write(content, 72, 700, 12, "The photo below shows the new office entrance.");
+				write(content, 76, 350, 12, "Caption printed over the office photo for review");
+			}
+			document.getDocumentInformation().setSubject(marker);
+			return save(document);
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
+	}
+
 	/** No text, but many filled shapes (like text converted to outlines). */
 	public static byte[] vectorOnly(String marker) {
 		try (PDDocument document = new PDDocument()) {

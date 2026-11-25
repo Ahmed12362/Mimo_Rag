@@ -20,6 +20,9 @@
 		<springdoc.version>3.2.1</springdoc.version>
 		<archunit.version>1.5.1</archunit.version>
 		<pdfbox.version>3.0.7</pdfbox.version>
+		<!-- Tests tagged ocr-it / ocr-bench need the real OCR service (and the 2a corpus): -Pocr-it, -Pocr-bench. -->
+		<test.groups></test.groups>
+		<test.excludedGroups>ocr-it,ocr-bench</test.excludedGroups>
 	</properties>
 
 	<dependencies>
@@ -135,7 +138,36 @@
 					<force>true</force>
 				</configuration>
 			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<groups>${test.groups}</groups>
+					<excludedGroups>${test.excludedGroups}</excludedGroups>
+				</configuration>
+			</plugin>
 		</plugins>
 	</build>
+
+	<profiles>
+		<!-- Real OCR accuracy suite (docs/adr/0014-ocr-service.md): needs the OCR container on MIMORAG_OCR_BASE_URL,
+		     MIMORAG_OCR_TOKEN, and the generated 2a corpus. Usage: ./mvnw test -Pocr-it -->
+		<profile>
+			<id>ocr-it</id>
+			<properties>
+				<test.groups>ocr-it</test.groups>
+				<test.excludedGroups>ocr-bench</test.excludedGroups>
+			</properties>
+		</profile>
+		<!-- OCR throughput / worker layout benchmark (docs/benchmarks/ocr-2d-results.md). Needs the OCR container;
+		     see OcrThroughputBenchmarkTest for the -D options. Usage: ./mvnw test -Pocr-bench -->
+		<profile>
+			<id>ocr-bench</id>
+			<properties>
+				<test.groups>ocr-bench</test.groups>
+				<test.excludedGroups>ocr-it</test.excludedGroups>
+			</properties>
+		</profile>
+	</profiles>
 
 </project>

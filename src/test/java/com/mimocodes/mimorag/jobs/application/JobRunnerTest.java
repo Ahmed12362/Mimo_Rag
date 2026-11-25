@@ -49,7 +49,7 @@ class JobRunnerTest {
 
 	private final JobProperties properties = new JobProperties(true, Duration.ofSeconds(1), Duration.ofMinutes(2),
 			Duration.ofSeconds(30), 3, Duration.ofSeconds(30), Duration.ofMinutes(15), Map.of(), 2,
-			Duration.ofSeconds(5));
+			Duration.ofSeconds(5), Map.of());
 
 	private JobRunner runner;
 

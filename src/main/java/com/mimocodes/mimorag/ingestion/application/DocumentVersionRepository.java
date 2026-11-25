@@ -25,6 +25,8 @@ public interface DocumentVersionRepository extends Repository<DocumentVersion, U
 
 	Optional<DocumentVersion> findByIntegrationIdAndExtractionJobId(UUID integrationId, UUID extractionJobId);
 
+	Optional<DocumentVersion> findByIntegrationIdAndOcrJobId(UUID integrationId, UUID ocrJobId);
+
 	List<DocumentVersion> findAllByIntegrationIdAndIdIn(UUID integrationId, Collection<UUID> ids);
 
 	List<DocumentVersion> findAllByIntegrationIdAndDocumentIdOrderByVersionNumberDesc(UUID integrationId,

@@ -67,10 +67,14 @@ class ExtractDocumentJobHandler implements JobHandler {
 
 	private final NativeExtractionService extraction;
 
+	private final KnowledgeBaseGate gate;
+
 	ExtractDocumentJobHandler(KnowledgeBaseService knowledgeBases, DocumentVersionRepository versions,
 			DocumentStorage storage, PdfInspector inspector, AuditRecorder audit, IngestionProperties properties,
-			Clock clock, PlatformTransactionManager transactionManager, NativeExtractionService extraction) {
+			Clock clock, PlatformTransactionManager transactionManager, NativeExtractionService extraction,
+			KnowledgeBaseGate gate) {
 		this.extraction = extraction;
+		this.gate = gate;
 		this.knowledgeBases = knowledgeBases;
 		this.versions = versions;
 		this.storage = storage;
@@ -89,7 +93,7 @@ class ExtractDocumentJobHandler implements JobHandler {
 	@Override
 	public void handle(JobExecution execution) {
 		UUID versionId = execution.requireUuid("versionId");
-		requireKnowledgeBaseStillAcceptsWork(execution, execution.requireUuid("knowledgeBaseId"));
+		gate.requireStillAcceptsWork(execution.access(), execution.requireUuid("knowledgeBaseId"));
 
 		DocumentVersion version = transaction.execute(status -> {
 			DocumentVersion v = load(execution, versionId);
@@ -156,22 +160,6 @@ class ExtractDocumentJobHandler implements JobHandler {
 						Map.of("versionId", v.getId().toString(), "errorCode", errorCode)));
 			}
 		});
-	}
-
-	private void requireKnowledgeBaseStillAcceptsWork(JobExecution execution, UUID knowledgeBaseId) {
-		KnowledgeBaseView kb;
-		try {
-			kb = knowledgeBases.get(execution.access(), knowledgeBaseId);
-		}
-		catch (ResourceNotFoundException gone) {
-			throw JobFailure.revalidation("KNOWLEDGE_BASE_UNAVAILABLE");
-		}
-		if (kb.status() != KnowledgeBaseStatus.ACTIVE) {
-			throw JobFailure.revalidation("KNOWLEDGE_BASE_ARCHIVED");
-		}
-		if (!kb.yourPermissions().contains(Permission.DOCUMENT_UPLOAD)) {
-			throw JobFailure.revalidation("UPLOAD_PERMISSION_REVOKED");
-		}
 	}
 
 	private DocumentVersion load(JobExecution execution, UUID versionId) {

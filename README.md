@@ -14,7 +14,7 @@ A generic, multi-tenant RAG platform for our company systems (HRIS, CRM, ERP, â€
 |---|---|
 | JDK | 21 or newer (the project targets Java 21) |
 | Docker | Docker Desktop / Engine with Compose v2 (needed for local PostgreSQL and for the integration tests) |
-| Disk | About 0.5 GB for the PostgreSQL image in M0. Check free space before later milestones add OCR and model images. |
+| Disk | About 0.5 GB for the PostgreSQL image; the optional OCR image (`mimorag-ocr:2d`) needs about 2.4 GB more. |
 
 No paid accounts or API keys are needed.
 
@@ -107,7 +107,7 @@ curl -X POST localhost:8080/api/v1/ingestion-jobs/<jobId>/retry -H "X-Api-Key: m
 
 After validation the same job extracts the native text page by page (slice 2c). The version ends as `EXTRACTED` (every
 page has usable text) or `AWAITING_OCR` (some pages are scans, drawn as shapes, mixed with large images, or have an
-unreliable text layer; OCR arrives in slice 2d).
+unreliable text layer).
 
 ```bash
 curl localhost:8080/api/v1/documents/<documentId>/extraction -H "X-Api-Key: mrk_..."   # progress, pages per class
@@ -119,10 +119,39 @@ Page listings and text need `DOCUMENT_REVIEW`. `text` is `null` when the page ne
 trusted. Warnings such as `INVISIBLE_TEXT`, `WHITE_TEXT`, `MIXED_DIRECTION_LINE` flag content for review; the text
 itself is never changed.
 
+### OCR (slice 2d, optional)
+
+With the OCR service running and `MIMORAG_OCR_ENABLED=true`, extraction hands `AWAITING_OCR` versions to an
+`OCR_DOCUMENT` job (its id is `nextJobId` of the extraction job and `ocrJobId` of the version). Scanned pages are
+rendered whole and image regions of mixed pages are rendered alone, at 300 DPI; the version ends `OCR_COMPLETED`
+(pages that could not be recognised are listed as failed) or `OCR_FAILED` (service unavailable after all attempts;
+retry the OCR job).
+
+```bash
+docker compose --profile ocr up -d ocr                                                  # 127.0.0.1:8090, token from .env
+curl localhost:8080/api/v1/ingestion-jobs/<ocrJobId> -H "X-Api-Key: mrk_..."           # progress of the OCR job
+curl localhost:8080/api/v1/documents/<documentId>/pages/1 -H "X-Api-Key: mrk_..."      # now also an "ocr" object
+```
+
+The page's `ocr` object holds the Arabic recogniser's `originalText`, the `proposedText` with recovered Latin tokens
+and digits inserted, per-line boxes, confidence and flags (`TOKEN_RECOVERED`, `TOKEN_MISSING_UNPLACED`,
+`TOKEN_POSSIBLY_MISSING`, `LOW_CONFIDENCE`), the engine versions and timings. It is `reviewState: UNREVIEWED`
+machine output: it never fills `text` and nothing is indexed before human review (M3). Contract, limits, failure
+handling and security: [ADR-0014](docs/adr/0014-ocr-service.md); the service itself:
+[ocr-service/README.md](ocr-service/README.md).
+
 ## Test
 
 ```bash
 ./mvnw clean verify     # unit, architecture and Testcontainers integration tests (Docker required)
+```
+
+OCR is tested against an in-process fake of the service. The real engine has two opt-in suites that need the OCR
+container (`MIMORAG_OCR_TOKEN` or `-Docr.it.token-file=...`):
+
+```bash
+./mvnw test -Pocr-it      # accuracy gate on the 2a corpus (benchmarks/ocr/generate_corpus.py), PDFBox rendering
+./mvnw test -Pocr-bench   # throughput / memory benchmark; see OcrThroughputBenchmarkTest for options
 ```
 
 ## Configuration
@@ -138,6 +167,9 @@ All settings come from environment variables. In the `local` profile they can al
 | `MIMORAG_DB_POOL_SIZE` | no | Connection pool size (default 10) |
 | `MIMORAG_ADMIN_KEY_SHA256` | no | Hex SHA-256 of the platform-admin key. Empty disables the admin API. |
 | `MIMORAG_INGESTION_STORAGE_ROOT` | no | Where original files are stored (default `data/storage`, git-ignored). Use a folder outside the repository, e.g. `D:/mimorag-data`. |
+| `MIMORAG_OCR_ENABLED` | no | `true` hands scanned pages to the OCR service (default `false`: they stay `AWAITING_OCR`) |
+| `MIMORAG_OCR_BASE_URL` | no | OCR service URL (default `http://127.0.0.1:8090`) |
+| `MIMORAG_OCR_TOKEN` | with OCR | Service-to-service token, at least 32 characters; the same value is given to the OCR container |
 | `MIMORAG_INGESTION_MAX_FILE_SIZE`, `..._MAX_PAGES`, `..._MAX_UNFINISHED_JOBS_PER_INTEGRATION`, `..._STORAGE_QUOTA_PER_INTEGRATION` | no | Upload limits (defaults 50MB, 500, 20, 2GB; decision D-29) |
 | `MIMORAG_JOBS_ENABLED` | no | Run background workers on this instance (default `true`). Worker counts per job kind: `--mimorag.jobs.workers.extract-document=2` |
 | `MIMORAG_DB_PORT`, `POSTGRES_*` | local only | Docker Compose container settings |

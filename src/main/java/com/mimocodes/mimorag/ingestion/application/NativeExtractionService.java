@@ -17,6 +17,9 @@ import com.mimocodes.mimorag.ingestion.domain.ExtractionRun;
 import com.mimocodes.mimorag.ingestion.domain.PageWarning;
 import com.mimocodes.mimorag.jobs.application.JobFailure;
 import com.mimocodes.mimorag.jobs.application.JobHandler.JobExecution;
+import com.mimocodes.mimorag.jobs.application.JobQueue;
+import com.mimocodes.mimorag.jobs.application.JobQueue.NewJob;
+import com.mimocodes.mimorag.shared.access.AccessContext;
 import com.mimocodes.mimorag.shared.audit.AuditEvent;
 import com.mimocodes.mimorag.shared.audit.AuditRecorder;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -61,10 +64,16 @@ public class NativeExtractionService {
 
 	private final TransactionTemplate transaction;
 
+	private final JobQueue jobs;
+
+	private final OcrProperties ocr;
+
 	NativeExtractionService(ExtractionRunRepository runs, PageExtractionStore pages,
 			DocumentVersionRepository versions, DocumentStorage storage, NativeTextExtractor extractor,
 			AuditRecorder audit, IngestionProperties properties, Clock clock, MeterRegistry meters,
-			PlatformTransactionManager transactionManager) {
+			PlatformTransactionManager transactionManager, JobQueue jobs, OcrProperties ocr) {
+		this.jobs = jobs;
+		this.ocr = ocr;
 		this.runs = runs;
 		this.pages = pages;
 		this.versions = versions;
@@ -89,7 +98,7 @@ public class NativeExtractionService {
 				extractPages(integrationId, run.getId(), version.getStorageKey(), from, run.getPagesTotal());
 			}
 		}
-		return finish(integrationId, run.getId(), versionId);
+		return finish(execution.access(), run.getId(), versionId);
 	}
 
 	private ExtractionRun openRun(JobExecution execution, UUID versionId) {
@@ -166,7 +175,13 @@ public class NativeExtractionService {
 		});
 	}
 
-	private DocumentVersionStatus finish(UUID integrationId, UUID runId, UUID versionId) {
+	/**
+	 * Completes the run and the version in one transaction. When OCR is enabled and pages need it, the
+	 * {@code OCR_DOCUMENT} job is enqueued in the same transaction, so a crash can never leave a version waiting for an
+	 * OCR job that does not exist (and a resumed job never enqueues a second one).
+	 */
+	private DocumentVersionStatus finish(AccessContext access, UUID runId, UUID versionId) {
+		UUID integrationId = access.requireIntegrationId();
 		return transaction.execute(status -> {
 			ExtractionRun run = runs.findByIdAndIntegrationId(runId, integrationId).orElseThrow();
 			run.recordProgress(pages.countByClass(integrationId, runId), clock.instant());
@@ -183,6 +198,14 @@ public class NativeExtractionService {
 							run.getPagesNative(), "pagesOcrRequired", run.getPagesOcrRequired(), "pagesMixed",
 							run.getPagesMixed(), "pagesEmpty", run.getPagesEmpty(), "pagesFailed",
 							run.getPagesFailed())));
+			}
+			if (version.getStatus() == DocumentVersionStatus.AWAITING_OCR && version.getOcrJobId() == null
+					&& ocr.enabled()) {
+				UUID jobId = jobs.enqueue(access, new NewJob(OcrService.OCR_DOCUMENT,
+						Map.of("documentId", version.getDocumentId().toString(), "versionId", versionId.toString(),
+								"knowledgeBaseId", version.getKnowledgeBaseId().toString())));
+				version.assignOcrJob(jobId, clock.instant());
+				versions.saveAndFlush(version);
 			}
 			return version.getStatus();
 		});
